@@ -899,15 +899,18 @@ function renderOcrSettings() {
     return '<option value="' + t.value + '"' + sel + '>' + t.label + '</option>';
   }).join('');
 
-  var togglesHtml = c.querySelectorAll('.setting-item');
-  var existingToggles = '';
-  togglesHtml.forEach(function(el) { existingToggles += el.outerHTML; });
+  var ocrExtraId = 'ocrExtraFields';
+  var existing = document.getElementById(ocrExtraId);
+  if (existing) existing.remove();
 
-  c.innerHTML = existingToggles +
+  var extraDiv = document.createElement('div');
+  extraDiv.id = ocrExtraId;
+  extraDiv.innerHTML =
     '<div class="setting-item"><div class="setting-info"><div class="setting-label">OCR 视觉模型</div><div class="setting-desc">选择用于识图的LLM Provider，需支持图片理解（如GPT-4o、Gemini Pro Vision）</div></div><select class="input-sm" id="inputOcrProviderId" style="width:220px">' + providerOptions + '</select></div>' +
     '<div class="setting-item"><div class="setting-info"><div class="setting-label">OCR 提示词模板</div><div class="setting-desc">选择内置提示词模板，自定义提示词时此项无效</div></div><select class="input-sm" id="inputOcrTemplate" style="width:300px">' + templateOptions + '</select></div>' +
     '<div class="setting-item"><div class="setting-info"><div class="setting-label">自定义系统提示词</div><div class="setting-desc">留空使用模板；填写后覆盖模板（需同时填写用户提示词）</div></div><textarea class="input-md" id="inputOcrSystemPrompt" rows="2" style="width:100%;max-width:400px" placeholder="留空使用模板提示词...">' + esc(ocrSystemPrompt) + '</textarea></div>' +
     '<div class="setting-item"><div class="setting-info"><div class="setting-label">自定义用户提示词</div><div class="setting-desc">留空使用模板；填写后覆盖模板（需同时填写系统提示词）</div></div><textarea class="input-md" id="inputOcrUserPrompt" rows="2" style="width:100%;max-width:400px" placeholder="留空使用模板提示词...">' + esc(ocrUserPrompt) + '</textarea></div>';
+  c.appendChild(extraDiv);
 }
 
 async function saveSettings() {

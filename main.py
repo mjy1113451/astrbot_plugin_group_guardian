@@ -853,7 +853,7 @@ class Main(Star):
         safe_config["_black_list"] = self.group_black_list
         safe_config["_user_black_list"] = self.user_black_list
         safe_config["_admin_list"] = self.config.get("admin_list", [])
-        return jsonify({"status": "success", "data": safe_config})
+        return jsonify(safe_config)
 
     async def _web_update_config(self):
         from quart import jsonify, request
@@ -2703,7 +2703,7 @@ class Main(Star):
                     return True
                 if seg_type == 'forward':
                     return True
-                if seg_type == 'image' and self._cfg("ocr_enabled", False):
+                if seg_type == 'image':
                     return True
             return False
         return True
