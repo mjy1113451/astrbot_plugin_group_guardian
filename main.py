@@ -3,13 +3,16 @@ import json
 import os
 import re
 import time
+import asyncio
+import struct
+from collections import deque
 from datetime import datetime
 from typing import Optional, Tuple, Dict, List
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 
-from astrbot.api.star import Context, Star, StarTools
+from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.api.message_components import Reply, Image
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
@@ -25,6 +28,7 @@ _PLUGIN_NAME = "astrbot_plugin_group_guardian"
 from .patterns import _POLITICAL_WHITELIST, SWEAR_PATTERNS, AD_PATTERNS
 
 
+@register("astrbot_plugin_group_guardian", "zhaisir", "QQ群智能守护者 - AI审核+群管工具集", "v1.9.4", "https://github.com/zcj-ui/astrbot_plugin_group_guardian")
 class Main(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
@@ -33,17 +37,35 @@ class Main(Star):
         self._client = None
         _gwl = self.config.get("group_white_list", [])
         self.group_white_list = [str(g).strip() for g in (_gwl if isinstance(_gwl, list) else [_gwl]) if g]
+        self._group_white_set = set(self.group_white_list)
         _gbl = self.config.get("group_black_list", [])
         self.group_black_list = [str(g).strip() for g in (_gbl if isinstance(_gbl, list) else [_gbl]) if g]
+        self._group_black_set = set(self.group_black_list)
         _ubl = self.config.get("user_black_list", [])
         self.user_black_list = [str(u).strip() for u in (_ubl if isinstance(_ubl, list) else [_ubl]) if u]
+        self._user_black_set = set(self.user_black_list)
         self.auto_moderate_enabled = self.config.get("auto_moderate_enabled", True)
-        self._compiled_swear = [re.compile(p, re.IGNORECASE) for p in SWEAR_PATTERNS]
-        self._compiled_ad = [re.compile(p, re.IGNORECASE) for p in AD_PATTERNS]
+        self._compiled_swear = self._build_combined_regex(SWEAR_PATTERNS)
+        self._compiled_ad = self._build_combined_regex(AD_PATTERNS)
         self._lexicon = self._load_lexicon()
         self._compiled_lexicon = self._compile_lexicon()
-        self._moderation_logs = self._load_logs()
+        self._moderation_logs = deque(self._load_logs(), maxlen=500)
+        self._last_log_save = 0.0
+        self._admin_role_cache: Dict[str, Tuple[bool, float]] = {}
+        self._admin_role_cache_ttl = 300.0
+        self._stats_cache = {"today_start": 0, "blocked": 0, "passed": 0, "total": 0, "group_stats": {}, "user_stats": {}}
+        self._log_lock = asyncio.Lock()
+        self._llm_semaphore = asyncio.Semaphore(5)
         self._register_web_apis()
+
+    async def terminate(self):
+        try:
+            data = list(self._moderation_logs)
+            p = self._logs_path()
+            self._write_logs_sync(p, data)
+            logger.info("[GroupMgr] 插件卸载，日志已保存")
+        except Exception as e:
+            logger.warning(f"[GroupMgr] 插件卸载保存日志失败: {e}")
 
     def _sync_astrbot_admins(self) -> None:
         try:
@@ -91,10 +113,29 @@ class Main(Star):
     def _save_logs(self) -> None:
         try:
             p = self._logs_path()
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(self._moderation_logs, f, ensure_ascii=False, indent=2)
+            data = list(self._moderation_logs)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, self._write_logs_sync, p, data)
+            except RuntimeError:
+                self._write_logs_sync(p, data)
+            self._last_log_save = time.time()
         except Exception:
             logger.exception("save_logs failed")
+
+    @staticmethod
+    def _write_logs_sync(path: str, data: list) -> None:
+        import tempfile
+        dir_name = os.path.dirname(path)
+        try:
+            fd, tmp_path = tempfile.mkstemp(suffix='.json', dir=dir_name)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
 
     def _register_web_apis(self):
         try:
@@ -223,13 +264,28 @@ class Main(Star):
             logger.warning(f"[GroupMgr] 注册 WebUI API 失败: {e}")
 
     async def _web_stats(self):
-        logs = self._moderation_logs
-        today_start = int(time.time()) - (int(time.time()) % 86400)
-        today_logs = [l for l in logs if l.get("ts", 0) >= today_start]
-        today_blocked = sum(1 for l in today_logs if "撤回" in l.get("action", ""))
+        today_start = self._today_start()
+        sc = self._stats_cache
+        if sc["today_start"] == today_start:
+            today_blocked = sc["blocked"]
+            today_passed = sc["passed"]
+            today_total = sc["total"]
+        else:
+            today_blocked = 0
+            today_passed = 0
+            today_total = 0
+            for l in self._moderation_logs:
+                if l.get("ts", 0) >= today_start:
+                    today_total += 1
+                    action = l.get("action", "")
+                    if "撤回" in action:
+                        today_blocked += 1
+                    elif "放行" in action:
+                        today_passed += 1
+            sc.update(today_start=today_start, blocked=today_blocked, passed=today_passed, total=today_total)
         stats = {
             "plugin_name": _PLUGIN_NAME,
-            "version": "v1.8.2",
+            "version": "v1.9.3",
             "auto_moderate_enabled": self.auto_moderate_enabled,
             "group_white_list_count": len(self.group_white_list),
             "group_black_list_count": len(self.group_black_list),
@@ -242,9 +298,9 @@ class Main(Star):
                 len(cat.get("keywords", [])) for cat in self._lexicon.values()
             ),
             "total_logs": len(logs),
-            "today_total": len(today_logs),
+            "today_total": today_total,
             "today_blocked": today_blocked,
-            "today_passed": sum(1 for l in today_logs if "放行" in l.get("action", "")),
+            "today_passed": today_passed,
         }
         return jsonify({"status": "success", "data": stats})
 
@@ -279,7 +335,7 @@ class Main(Star):
 
     async def _web_update_config(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             bool_keys = [
                 "enabled", "auto_moderate_enabled", "auto_moderate_notice",
                 "scan_swear", "scan_ad",
@@ -300,7 +356,7 @@ class Main(Star):
                 "group_honor_enabled", "at_all_remain_enabled",
                 "ignore_requests_enabled", "group_msg_history_enabled",
                 "group_portrait_enabled", "group_sign_enabled",
-                "scan_forward_msg", "ocr_enabled", "recall_qq_favorite_enabled",
+                "scan_forward_msg", "ocr_enabled", "recall_qq_favorite_enabled", "scan_sticker_enabled",
             ]
             list_keys = [
                 "group_white_list", "group_black_list",
@@ -346,15 +402,19 @@ class Main(Star):
             if "group_white_list" in updated:
                 _gwl = self.config.get("group_white_list", [])
                 self.group_white_list = [str(g).strip() for g in (_gwl if isinstance(_gwl, list) else [_gwl]) if g]
+                self._group_white_set = set(self.group_white_list)
             if "group_black_list" in updated:
                 _gbl = self.config.get("group_black_list", [])
                 self.group_black_list = [str(g).strip() for g in (_gbl if isinstance(_gbl, list) else [_gbl]) if g]
+                self._group_black_set = set(self.group_black_list)
             if "user_black_list" in updated:
                 _ubl = self.config.get("user_black_list", [])
                 self.user_black_list = [str(u).strip() for u in (_ubl if isinstance(_ubl, list) else [_ubl]) if u]
+                self._user_black_set = set(self.user_black_list)
             if "admin_list" in updated:
                 al = self.config.get("admin_list", [])
                 self.config["admin_list"] = [str(a).strip() for a in (al if isinstance(al, list) else [al]) if a]
+                self._admin_role_cache.clear()
             if "enabled" in updated:
                 self.config["enabled"] = bool(self.config.get("enabled", True))
             if updated:
@@ -368,17 +428,16 @@ class Main(Star):
 
     async def _web_get_logs(self):
         limit = min(int(quart_request.args.get("limit", 50)), 200)
-        logs = self._moderation_logs[-limit:]
+        logs = list(self._moderation_logs)[-limit:]
         return jsonify({"status": "success", "data": logs})
 
     async def _web_get_moderation_users(self):
         logs = self._moderation_logs
         action_filter = quart_request.args.get("action", "").strip()
-        filtered = logs
-        if action_filter:
-            filtered = [l for l in logs if action_filter in l.get("action", "")]
         user_map = {}
-        for log in filtered:
+        for log in logs:
+            if action_filter and action_filter not in log.get("action", ""):
+                continue
             uid = log.get("user_id", "")
             if not uid:
                 continue
@@ -395,36 +454,40 @@ class Main(Star):
             u = user_map[uid]
             u["count"] += 1
             u["last_time"] = log.get("time", "")
-            u["records"].append({
-                "id": log.get("id"),
-                "time": log.get("time", ""),
-                "ts": log.get("ts", 0),
-                "group_id": log.get("group_id", ""),
-                "msg_preview": log.get("msg_preview", ""),
-                "msg_text": log.get("msg_text", ""),
-                "action": log.get("action", ""),
-                "reason": log.get("reason", ""),
-            })
+            if len(u["records"]) < 50:
+                u["records"].append({
+                    "id": log.get("id"),
+                    "time": log.get("time", ""),
+                    "ts": log.get("ts", 0),
+                    "group_id": log.get("group_id", ""),
+                    "msg_preview": log.get("msg_preview", ""),
+                    "msg_text": log.get("msg_text", ""),
+                    "action": log.get("action", ""),
+                    "reason": log.get("reason", ""),
+                })
         users = sorted(user_map.values(), key=lambda x: x["count"], reverse=True)
         return jsonify({"status": "success", "data": users})
 
     async def _web_delete_logs(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             ids = data.get("ids", [])
             delete_all = data.get("delete_all", False)
-            logs = self._moderation_logs
             if delete_all:
-                self._moderation_logs = []
+                count = len(self._moderation_logs)
+                self._moderation_logs.clear()
+                self._invalidate_stats_cache()
                 self._save_logs()
-                return jsonify({"status": "success", "deleted": len(logs)})
+                return jsonify({"status": "success", "deleted": count})
             if not ids:
                 return jsonify({"status": "error", "message": "未指定要删除的日志ID"})
             id_set = set(int(i) for i in ids)
-            before = len(logs)
-            self._moderation_logs = [l for l in logs if l.get("id") not in id_set]
-            for i, log in enumerate(self._moderation_logs):
+            before = len(self._moderation_logs)
+            new_logs = deque((l for l in self._moderation_logs if l.get("id") not in id_set), maxlen=500)
+            for i, log in enumerate(new_logs):
                 log["id"] = i
+            self._moderation_logs = new_logs
+            self._invalidate_stats_cache()
             self._save_logs()
             return jsonify({"status": "success", "deleted": before - len(self._moderation_logs)})
         except Exception as e:
@@ -432,7 +495,7 @@ class Main(Star):
 
     async def _web_export_logs(self):
         fmt = quart_request.args.get("format", "json").strip().lower()
-        logs = self._moderation_logs
+        logs = list(self._moderation_logs)
         if fmt == "csv":
             import csv, io
             output = io.StringIO()
@@ -454,23 +517,20 @@ class Main(Star):
         try:
             result = await client.call_action('get_group_list')
             groups = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            today_start = self._today_start()
+            white_set = self._group_white_set
+            today_blocked_map = {}
+            for l in self._moderation_logs:
+                if l.get("ts", 0) >= today_start and "撤回" in l.get("action", ""):
+                    gid = str(l.get("group_id", ""))
+                    if gid in white_set:
+                        today_blocked_map[gid] = today_blocked_map.get(gid, 0) + 1
             enriched = []
-            today_start = int(time.time()) - (int(time.time()) % 86400)
             for g in groups:
                 gid = str(g.get("group_id", ""))
-                member_count = g.get("member_count")
-                if member_count is None:
-                    try:
-                        mlist = await client.call_action('get_group_member_list', group_id=int(gid))
-                        member_count = len(mlist) if isinstance(mlist, list) else 0
-                    except Exception:
-                        member_count = 0
-                is_white = gid in self.group_white_list
-                is_black = gid in self.group_black_list
-                today_count = 0
-                if is_white:
-                    logs = self._moderation_logs
-                    today_count = sum(1 for l in logs if str(l.get("group_id", "")) == gid and l.get("ts", 0) >= today_start and "撤回" in l.get("action", ""))
+                member_count = g.get("member_count", 0)
+                is_white = gid in white_set
+                is_black = gid in self._group_black_set
                 enriched.append({
                     "group_id": gid,
                     "group_name": g.get("group_name", ""),
@@ -478,7 +538,7 @@ class Main(Star):
                     "avatar": f"https://p.qlogo.cn/gh/{gid}/{gid}/",
                     "is_white": is_white,
                     "is_black": is_black,
-                    "today_blocked": today_count,
+                    "today_blocked": today_blocked_map.get(gid, 0),
                 })
             return jsonify({"status": "success", "data": enriched})
         except Exception as e:
@@ -522,15 +582,17 @@ class Main(Star):
 
     async def _web_whitelist_add(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             group_id = str(data.get("group_id", "")).strip()
             if not group_id:
                 return jsonify({"status": "error", "message": "缺少 group_id"})
-            if group_id in self.group_black_list:
+            if group_id in self._group_black_set:
                 self.group_black_list.remove(group_id)
+                self._group_black_set.discard(group_id)
                 self.config["group_black_list"] = self.group_black_list
-            if group_id not in self.group_white_list:
+            if group_id not in self._group_white_set:
                 self.group_white_list.append(group_id)
+                self._group_white_set.add(group_id)
                 self.config["group_white_list"] = self.group_white_list
             self._save_config_safe()
             return jsonify({"status": "success", "group_id": group_id, "white_list": self.group_white_list})
@@ -539,12 +601,13 @@ class Main(Star):
 
     async def _web_whitelist_remove(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             group_id = str(data.get("group_id", "")).strip()
             if not group_id:
                 return jsonify({"status": "error", "message": "缺少 group_id"})
-            if group_id in self.group_white_list:
+            if group_id in self._group_white_set:
                 self.group_white_list.remove(group_id)
+                self._group_white_set.discard(group_id)
                 self.config["group_white_list"] = self.group_white_list
             self._save_config_safe()
             return jsonify({"status": "success", "group_id": group_id, "white_list": self.group_white_list})
@@ -553,15 +616,17 @@ class Main(Star):
 
     async def _web_blacklist_add(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             group_id = str(data.get("group_id", "")).strip()
             if not group_id:
                 return jsonify({"status": "error", "message": "缺少 group_id"})
-            if group_id in self.group_white_list:
+            if group_id in self._group_white_set:
                 self.group_white_list.remove(group_id)
+                self._group_white_set.discard(group_id)
                 self.config["group_white_list"] = self.group_white_list
-            if group_id not in self.group_black_list:
+            if group_id not in self._group_black_set:
                 self.group_black_list.append(group_id)
+                self._group_black_set.add(group_id)
                 self.config["group_black_list"] = self.group_black_list
             self._save_config_safe()
             return jsonify({"status": "success", "group_id": group_id, "black_list": self.group_black_list})
@@ -570,12 +635,13 @@ class Main(Star):
 
     async def _web_blacklist_remove(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             group_id = str(data.get("group_id", "")).strip()
             if not group_id:
                 return jsonify({"status": "error", "message": "缺少 group_id"})
-            if group_id in self.group_black_list:
+            if group_id in self._group_black_set:
                 self.group_black_list.remove(group_id)
+                self._group_black_set.discard(group_id)
                 self.config["group_black_list"] = self.group_black_list
             self._save_config_safe()
             return jsonify({"status": "success", "group_id": group_id, "black_list": self.group_black_list})
@@ -584,12 +650,13 @@ class Main(Star):
 
     async def _web_user_blacklist_add(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             user_id = str(data.get("user_id", "")).strip()
             if not user_id:
                 return jsonify({"status": "error", "message": "缺少 user_id"})
-            if user_id not in self.user_black_list:
+            if user_id not in self._user_black_set:
                 self.user_black_list.append(user_id)
+                self._user_black_set.add(user_id)
                 self.config["user_black_list"] = self.user_black_list
             self._save_config_safe()
             return jsonify({"status": "success", "user_id": user_id, "user_black_list": self.user_black_list})
@@ -598,12 +665,13 @@ class Main(Star):
 
     async def _web_user_blacklist_remove(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             user_id = str(data.get("user_id", "")).strip()
             if not user_id:
                 return jsonify({"status": "error", "message": "缺少 user_id"})
-            if user_id in self.user_black_list:
+            if user_id in self._user_black_set:
                 self.user_black_list.remove(user_id)
+                self._user_black_set.discard(user_id)
                 self.config["user_black_list"] = self.user_black_list
             self._save_config_safe()
             return jsonify({"status": "success", "user_id": user_id, "user_black_list": self.user_black_list})
@@ -612,7 +680,7 @@ class Main(Star):
 
     async def _web_admin_add(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             user_id = str(data.get("user_id", "")).strip()
             if not user_id:
                 return jsonify({"status": "error", "message": "缺少 user_id"})
@@ -623,6 +691,7 @@ class Main(Star):
             if user_id not in admin_list:
                 admin_list.append(user_id)
                 self.config["admin_list"] = admin_list
+            self._admin_role_cache.clear()
             self._save_config_safe()
             return jsonify({"status": "success", "user_id": user_id, "admin_list": admin_list})
         except Exception as e:
@@ -630,7 +699,7 @@ class Main(Star):
 
     async def _web_admin_remove(self):
         try:
-            data = await request.get_json(force=True, silent=True) or {}
+            data = await quart_request.get_json(force=True, silent=True) or {}
             user_id = str(data.get("user_id", "")).strip()
             if not user_id:
                 return jsonify({"status": "error", "message": "缺少 user_id"})
@@ -641,39 +710,55 @@ class Main(Star):
             if user_id in admin_list:
                 admin_list.remove(user_id)
                 self.config["admin_list"] = admin_list
+            self._admin_role_cache.clear()
             self._save_config_safe()
             return jsonify({"status": "success", "user_id": user_id, "admin_list": admin_list})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
 
     async def _web_today_stats(self):
-        logs = self._moderation_logs
-        today_start = int(time.time()) - (int(time.time()) % 86400)
-        today_logs = [l for l in logs if l.get("ts", 0) >= today_start]
-        group_stats = {}
-        user_stats = {}
-        for l in today_logs:
-            gid = str(l.get("group_id", ""))
-            uid = str(l.get("user_id", ""))
-            action = l.get("action", "")
-            if "撤回" in action:
-                if gid:
-                    group_stats[gid] = group_stats.get(gid, 0) + 1
-                if uid:
-                    user_stats[uid] = user_stats.get(uid, 0) + 1
+        today_start = self._today_start()
+        sc = self._stats_cache
+        if sc["today_start"] == today_start and sc.get("user_names"):
+            blocked_today = sc["blocked"]
+            passed_today = sc["passed"]
+            total_today = sc["total"]
+            group_stats = dict(sc["group_stats"])
+            user_stats = dict(sc["user_stats"])
+            user_names = dict(sc["user_names"])
+        else:
+            group_stats = {}
+            user_stats = {}
+            user_names = {}
+            blocked_today = 0
+            passed_today = 0
+            total_today = 0
+            for l in self._moderation_logs:
+                uid = str(l.get("user_id", ""))
+                if uid and uid not in user_names:
+                    user_names[uid] = l.get("user_name", "")
+                if l.get("ts", 0) >= today_start:
+                    total_today += 1
+                    gid = str(l.get("group_id", ""))
+                    action = l.get("action", "")
+                    if "撤回" in action:
+                        blocked_today += 1
+                        if gid:
+                            group_stats[gid] = group_stats.get(gid, 0) + 1
+                        if uid:
+                            user_stats[uid] = user_stats.get(uid, 0) + 1
+                    elif "放行" in action:
+                        passed_today += 1
+            sc.update(today_start=today_start, blocked=blocked_today, passed=passed_today,
+                      total=total_today, group_stats=group_stats, user_stats=user_stats, user_names=user_names)
         group_ranking = sorted(group_stats.items(), key=lambda x: x[1], reverse=True)[:20]
         user_ranking = sorted(user_stats.items(), key=lambda x: x[1], reverse=True)[:20]
-        user_names = {}
-        for l in logs:
-            uid = str(l.get("user_id", ""))
-            if uid and uid not in user_names:
-                user_names[uid] = l.get("user_name", "")
         return jsonify({
             "status": "success",
             "data": {
-                "total_today": len(today_logs),
-                "blocked_today": sum(1 for l in today_logs if "撤回" in l.get("action", "")),
-                "passed_today": sum(1 for l in today_logs if "放行" in l.get("action", "")),
+                "total_today": total_today,
+                "blocked_today": blocked_today,
+                "passed_today": passed_today,
                 "group_ranking": [{"group_id": g, "count": c} for g, c in group_ranking],
                 "user_ranking": [{"user_id": u, "user_name": user_names.get(u, ""), "count": c} for u, c in user_ranking],
             }
@@ -682,11 +767,34 @@ class Main(Star):
     def _cfg(self, key: str, default: bool = True) -> bool:
         return bool(self.config.get(key, default))
 
+    def _today_start(self) -> int:
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return int(today.timestamp())
+
     def _safe_int(self, value, default: int = 0) -> int:
         try:
             return int(value)
         except (ValueError, TypeError):
             return default
+
+    @staticmethod
+    def _build_combined_regex(patterns: list, chunk_size: int = 500) -> list:
+        if not patterns:
+            return []
+        compiled = []
+        for i in range(0, len(patterns), chunk_size):
+            chunk = patterns[i:i + chunk_size]
+            combined = '|'.join(f'(?:{p})' for p in chunk)
+            try:
+                compiled.append(re.compile(combined, re.IGNORECASE))
+            except re.error:
+                for p in chunk:
+                    try:
+                        compiled.append(re.compile(p, re.IGNORECASE))
+                    except re.error:
+                        pass
+        return compiled
 
     def _cfg_check(self, key: str, name: str) -> Tuple[bool, str]:
         if not self._cfg("enabled"):
@@ -711,6 +819,10 @@ class Main(Star):
 
     def _load_lexicon(self) -> Dict[str, Dict]:
         lexicon_path = os.path.join(self._get_plugin_dir(), "lexicon.json")
+        data_dir = StarTools.get_data_dir()
+        data_lexicon_path = str(data_dir / "lexicon.json")
+        if os.path.exists(data_lexicon_path):
+            lexicon_path = data_lexicon_path
         if not os.path.exists(lexicon_path):
             logger.warning("[GroupMgr] 外置词库文件不存在，跳过加载")
             return {}
@@ -757,7 +869,7 @@ class Main(Star):
             if not switch_map.get(cat_name, True):
                 continue
             keywords = cat_data.get("keywords", [])
-            patterns = []
+            escaped_parts = []
             min_len = 2 if cat_name == "illegal_url" else 3
             skip_keywords = _POLITICAL_WHITELIST if cat_name == "political" else set()
             for kw in keywords:
@@ -768,23 +880,42 @@ class Main(Star):
                     parts = [p.strip() for p in kw.split('+') if p.strip()]
                     for part in parts:
                         if len(part) >= min_len and part.lower() not in skip_keywords:
-                            patterns.append(re.compile(re.escape(part), re.IGNORECASE))
+                            escaped_parts.append(re.escape(part))
                 else:
                     if len(kw) < min_len:
                         continue
-                    patterns.append(re.compile(re.escape(kw), re.IGNORECASE))
-            if patterns:
-                compiled[cat_name] = patterns
+                    escaped_parts.append(re.escape(kw))
+            if escaped_parts:
+                compiled[cat_name] = self._build_combined_regex_from_escaped(escaped_parts)
+        return compiled
+
+    @staticmethod
+    def _build_combined_regex_from_escaped(escaped_parts: list, chunk_size: int = 3000) -> list:
+        if not escaped_parts:
+            return []
+        compiled = []
+        for i in range(0, len(escaped_parts), chunk_size):
+            chunk = escaped_parts[i:i + chunk_size]
+            combined = '|'.join(chunk)
+            try:
+                compiled.append(re.compile(combined, re.IGNORECASE))
+            except re.error:
+                for p in chunk:
+                    try:
+                        compiled.append(re.compile(p, re.IGNORECASE))
+                    except re.error:
+                        pass
         return compiled
 
     def _check_lexicon(self, text: str) -> Dict[str, bool]:
         result = {}
+        text_lower = text.lower()
         for cat_name, patterns in self._compiled_lexicon.items():
             hit = False
             for p in patterns:
-                m = p.search(text)
+                m = p.search(text_lower)
                 if m:
-                    logger.info(f"[GroupMgr] 词库命中 [{cat_name}]: 关键词='{m.group()}'")
+                    logger.debug(f"[GroupMgr] 词库命中 [{cat_name}]: 关键词='{m.group()}'")
                     hit = True
                     break
             result[cat_name] = hit
@@ -880,34 +1011,40 @@ class Main(Star):
             pass
         try:
             config_admins = self.config.get("admin_list", [])
-            all_admins = set(astrbot_admin_ids) | set([str(a).strip() for a in config_admins if a])
+            all_admins = set(astrbot_admin_ids) | set(str(a).strip() for a in config_admins if a)
             if user_id in all_admins:
                 return True
         except Exception as e:
             logger.warning(f"[GroupMgr] 读取config admin_list失败: {e}")
 
-        try:
-            group_id = self._get_group_id(event)
-            if group_id:
-                try:
-                    group_id_int = int(group_id)
-                except (ValueError, TypeError):
-                    logger.warning(f"[GroupMgr] 群号格式无效: {group_id}")
-                    return False
-                try:
-                    user_id_int = int(user_id)
-                except (ValueError, TypeError):
-                    logger.warning(f"[GroupMgr] 用户ID格式无效: {user_id}")
-                    return False
+        group_id = self._get_group_id(event)
+        if group_id:
+            cache_key = f"{group_id}:{user_id}"
+            cached = self._admin_role_cache.get(cache_key)
+            if cached:
+                is_admin_val, ts = cached
+                if time.time() - ts < self._admin_role_cache_ttl:
+                    return is_admin_val
+
+            try:
+                group_id_int = int(group_id)
+            except (ValueError, TypeError):
+                return False
+            try:
+                user_id_int = int(user_id)
+            except (ValueError, TypeError):
+                return False
+            try:
                 client = await self._get_client(event)
                 if client:
-                    info = await client.call_action('get_group_member_info', group_id=group_id_int, user_id=user_id_int, no_cache=True)
+                    info = await client.call_action('get_group_member_info', group_id=group_id_int, user_id=user_id_int, no_cache=False)
                     if info:
                         role = info.get('role', '')
-                        if role in ('admin', 'owner'):
-                            return True
-        except Exception as e:
-            logger.debug(f"[GroupMgr] 获取群成员信息失败: {e}")
+                        is_admin_val = role in ('admin', 'owner')
+                        self._admin_role_cache[cache_key] = (is_admin_val, time.time())
+                        return is_admin_val
+            except Exception as e:
+                logger.debug(f"[GroupMgr] 获取群成员信息失败: {e}")
 
         return False
 
@@ -915,10 +1052,10 @@ class Main(Star):
         group_id = self._get_group_id(event)
         if not group_id:
             return True, ""
-        if self.group_black_list and group_id in self.group_black_list:
+        if self._group_black_set and group_id in self._group_black_set:
             return False, f"群 {group_id} 在黑名单中"
-        if self.group_white_list:
-            if group_id not in self.group_white_list:
+        if self._group_white_set:
+            if group_id not in self._group_white_set:
                 return False, f"群 {group_id} 不在白名单中"
         return True, ""
 
@@ -969,14 +1106,19 @@ class Main(Star):
                 parts.append(f"[回复:{d.get('id', '')}]")
             elif t == 'face':
                 parts.append("[表情]")
+            elif t == 'market_face':
+                parts.append("[商城表情]")
             elif t == 'forward':
                 parts.append('[合并转发消息]')
             else:
                 parts.append(f"[{t}]")
         return ''.join(parts) if parts else '[空消息]'
 
+    def _invalidate_stats_cache(self):
+        self._stats_cache["today_start"] = 0
+
     def _log_moderation(self, group_id: str, user_id: str, user_name: str, msg_text: str, action: str, reason: str = ""):
-        self._moderation_logs.append({
+        log_entry = {
             "id": len(self._moderation_logs),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ts": int(time.time()),
@@ -987,12 +1129,26 @@ class Main(Star):
             "msg_preview": msg_text[:100],
             "action": action,
             "reason": reason,
-        })
-        if len(self._moderation_logs) > 500:
-            self._moderation_logs = self._moderation_logs[-400:]
-            for i, log in enumerate(self._moderation_logs):
-                log["id"] = i
-        self._save_logs()
+        }
+        self._moderation_logs.append(log_entry)
+        today_start = self._today_start()
+        sc = self._stats_cache
+        if sc["today_start"] == today_start:
+            sc["total"] += 1
+            if user_id and user_name:
+                sc.setdefault("user_names", {})[user_id] = user_name
+            if "撤回" in action:
+                sc["blocked"] += 1
+                if group_id:
+                    sc["group_stats"][group_id] = sc["group_stats"].get(group_id, 0) + 1
+                if user_id:
+                    sc["user_stats"][user_id] = sc["user_stats"].get(user_id, 0) + 1
+            elif "放行" in action:
+                sc["passed"] += 1
+        now = time.time()
+        if now - self._last_log_save >= 15.0:
+            self._save_logs()
+            self._last_log_save = now
 
     # ==================== LLM 群管工具 ====================
     @filter.llm_tool(name="ban_group_member")
@@ -1849,6 +2005,12 @@ class Main(Star):
     async def _call_llm_safe(self, system_prompt: str, prompt: str) -> str:
         configured_id = str(self.config.get("moderation_llm_provider_id", "")).strip()
         errors = []
+        error_set = set()
+
+        def _add_error(err: str):
+            if err not in error_set:
+                error_set.add(err)
+                errors.append(err)
 
         async def _try_text_chat(prov, pid: str) -> str:
             if not hasattr(prov, 'text_chat'):
@@ -1865,9 +2027,7 @@ class Main(Star):
                 except (TypeError, ValueError):
                     continue
                 except Exception as e:
-                    err_str = str(e)[:120]
-                    if not any(err_str in existing for existing in errors):
-                        errors.append(f"{pid}.text_chat: {err_str}")
+                    _add_error(f"{pid}.text_chat: {str(e)[:120]}")
                     continue
             return None
 
@@ -1891,9 +2051,7 @@ class Main(Star):
                     except (TypeError, ValueError):
                         continue
                     except Exception as e:
-                        err_str = str(e)[:120]
-                        if not any(err_str in existing for existing in errors):
-                            errors.append(f"{pid}.{meth}: {err_str}")
+                        _add_error(f"{pid}.{meth}: {str(e)[:120]}")
                         continue
             return None
 
@@ -1905,9 +2063,7 @@ class Main(Star):
                     if resp:
                         return self._extract_llm_text(resp)
                 except Exception as e:
-                    err_str = str(e)[:120]
-                    if not any(err_str in existing for existing in errors):
-                        errors.append(f"llm_generate({pid}): {err_str}")
+                    _add_error(f"llm_generate({pid}): {str(e)[:120]}")
             prov = self.context.get_provider_by_id(pid) if hasattr(self.context, 'get_provider_by_id') else None
             if prov:
                 result = await _try_provider(prov, pid)
@@ -1921,17 +2077,13 @@ class Main(Star):
                 logger.info(f"[GroupMgr] LLM审核使用指定provider: {configured_id}")
                 return result
             except Exception as e:
-                err_str = str(e)[:120]
-                if not any(err_str in existing for existing in errors):
-                    errors.append(f"指定{configured_id}: {err_str}")
+                _add_error(f"指定{configured_id}: {str(e)[:120]}")
 
         try:
             ps = (self.context.get_all_providers() if hasattr(self.context, 'get_all_providers') else []) or []
         except Exception as e:
             ps = []
-            err_str = str(e)[:120]
-            if not any(err_str in existing for existing in errors):
-                errors.append(f"get_all_providers: {err_str}")
+            _add_error(f"get_all_providers: {str(e)[:120]}")
 
         for p in ps:
             try:
@@ -1941,9 +2093,7 @@ class Main(Star):
                 logger.info(f"[GroupMgr] LLM审核使用provider: {pid}")
                 return result
             except Exception as e:
-                err_str = str(e)[:80]
-                if not any(err_str in existing for existing in errors):
-                    errors.append(err_str)
+                _add_error(str(e)[:80])
                 continue
 
         try:
@@ -1956,16 +2106,16 @@ class Main(Star):
                         logger.info("[GroupMgr] LLM审核使用provider_manager")
                         return result
         except Exception as e:
-            err_str = str(e)[:120]
-            if not any(err_str in existing for existing in errors):
-                errors.append(f"provider_manager: {err_str}")
+            _add_error(f"provider_manager: {str(e)[:120]}")
 
         detail = '; '.join(errors[:5]) if errors else '无任何可用Provider'
         raise RuntimeError(f"LLM调用失败({detail})。请检查AstrBot是否已配置LLM Provider")
 
     async def _call_llm_for_moderation(self, event: AiocqhttpMessageEvent,
-                                        text: str, hit_types: Dict[str, bool]) -> dict:
-        group_id = self._get_group_id(event)
+                                        text: str, hit_types: Dict[str, bool],
+                                        group_id: str = "") -> dict:
+        if not group_id:
+            group_id = self._get_group_id(event)
         msg_obj = getattr(event, 'message_obj', None)
         msg_id = str(getattr(msg_obj, 'message_id', '')) if msg_obj else ''
         user_name = event.get_sender_name()
@@ -1979,8 +2129,12 @@ class Main(Star):
                 sender_obj = m.get('sender')
                 sender = sender_obj.get('nickname', '未知') if isinstance(sender_obj, dict) else '未知'
                 content = self._format_message_content(m.get('message', ''))
+                if len(content) > 200:
+                    content = content[:200] + '...'
                 lines.append(f"  {sender}: {content}")
             context_text = "\n".join(lines)
+            if len(context_text) > 3000:
+                context_text = context_text[-3000:]
         suspect_types = [k for k, v in hit_types.items() if v]
         suspect_tag = "+".join(suspect_types) if suspect_types else "无"
         type_desc = {
@@ -2071,7 +2225,8 @@ class Main(Star):
             "请结合上下文语境合理判断。返回严格的JSON格式。"
         )
         try:
-            llm_response = await self._call_llm_safe(system_prompt, prompt)
+            async with self._llm_semaphore:
+                llm_response = await self._call_llm_safe(system_prompt, prompt)
             json_match = re.search(r'\{.*?\}', llm_response, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
@@ -2109,6 +2264,8 @@ class Main(Star):
                         return True
                     if seg_type == 'image':
                         return True
+                    if seg_type == 'market_face':
+                        return True
                 else:
                     seg_cls = type(seg).__name__
                     if seg_cls == 'Plain' and getattr(seg, 'text', '').strip():
@@ -2117,6 +2274,8 @@ class Main(Star):
                         return True
                     if seg_cls == 'Image' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'image'):
                         return True
+                    if seg_cls == 'MarketFace' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'market_face'):
+                        return True
                     if seg_cls == 'Json' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'json'):
                         return True
                     if seg_cls == 'App' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'app'):
@@ -2124,10 +2283,10 @@ class Main(Star):
             return False
         return True
 
-    async def _extract_forward_text(self, event: AiocqhttpMessageEvent) -> str:
+    async def _resolve_forward_messages(self, event: AiocqhttpMessageEvent) -> Tuple[str, bool]:
         client = await self._get_client(event)
         if not client:
-            return ""
+            return "", False
         chain = event.get_messages() or []
         forward_ids = []
         for seg in chain:
@@ -2146,8 +2305,9 @@ class Main(Star):
                     if fid:
                         forward_ids.append(fid)
         if not forward_ids:
-            return ""
+            return "", False
         all_texts = []
+        is_qq_favorite = False
         for fid in forward_ids:
             try:
                 result = await client.call_action('get_forward_msg', message_id=fid)
@@ -2161,6 +2321,9 @@ class Main(Star):
                         continue
                     sender = msg.get('sender', {})
                     nickname = sender.get('nickname', '未知') if isinstance(sender, dict) else '未知'
+                    card = sender.get('card', '') if isinstance(sender, dict) else ''
+                    if 'QQ收藏' in nickname or 'QQ收藏' in card or 'qq收藏' in nickname.lower() or 'qq收藏' in card.lower():
+                        is_qq_favorite = True
                     content = msg.get('message', '')
                     if isinstance(content, list):
                         parts = []
@@ -2174,6 +2337,11 @@ class Main(Star):
                                     parts.append('[图片]')
                                 elif ct == 'forward':
                                     parts.append('[嵌套转发]')
+                                elif ct == 'app':
+                                    app_content = cd.get('content', '')
+                                    if isinstance(app_content, str) and ('QQ收藏' in app_content or 'qq收藏' in app_content.lower()):
+                                        is_qq_favorite = True
+                                    parts.append(f'[{ct}]')
                                 else:
                                     parts.append(f'[{ct}]')
                             else:
@@ -2181,12 +2349,51 @@ class Main(Star):
                         content_text = ''.join(parts)
                     else:
                         content_text = str(content)
+                        if isinstance(content, str) and ('QQ收藏' in content or 'qq收藏' in content.lower()):
+                            is_qq_favorite = True
                     if content_text.strip():
                         all_texts.append(f"[转发]{nickname}: {content_text.strip()}")
             except Exception as e:
                 logger.debug(f"[GroupMgr] 获取转发消息内容失败: {e}")
                 all_texts.append("[转发消息获取失败]")
-        return '\n'.join(all_texts)
+        return '\n'.join(all_texts), is_qq_favorite
+
+    async def _check_qq_favorite_non_forward(self, event: AiocqhttpMessageEvent) -> bool:
+        raw = getattr(event, 'raw_event', None)
+        chain = event.get_messages() or []
+        if isinstance(raw, dict):
+            msg_list = raw.get('message', [])
+            if isinstance(msg_list, list):
+                for seg in msg_list:
+                    if not isinstance(seg, dict):
+                        continue
+                    seg_type = seg.get('type', '')
+                    seg_data = seg.get('data', {}) or {}
+                    if seg_type == 'json':
+                        json_content = seg_data.get('data', '')
+                        if isinstance(json_content, str) and ('QQ收藏' in json_content or 'qq收藏' in json_content.lower() or 'sharechain.qq.com' in json_content):
+                            return True
+                    elif seg_type == 'app':
+                        app_content = seg_data.get('content', '')
+                        if isinstance(app_content, str) and ('QQ收藏' in app_content or 'qq收藏' in app_content.lower()):
+                            return True
+        for seg in chain:
+            if isinstance(seg, dict):
+                continue
+            seg_cls = type(seg).__name__
+            if seg_cls == 'Json' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'json'):
+                json_data = getattr(seg, 'data', '') or ''
+                if isinstance(json_data, str) and ('QQ收藏' in json_data or 'qq收藏' in json_data.lower() or 'sharechain.qq.com' in json_data):
+                    return True
+                if isinstance(json_data, dict):
+                    json_str = str(json_data)
+                    if 'QQ收藏' in json_str or 'qq收藏' in json_str.lower() or 'sharechain.qq.com' in json_str:
+                        return True
+            elif seg_cls == 'App' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'app'):
+                app_content = getattr(seg, 'content', '') or ''
+                if isinstance(app_content, str) and ('QQ收藏' in app_content or 'qq收藏' in app_content.lower()):
+                    return True
+        return False
 
     async def _check_qq_favorite(self, event: AiocqhttpMessageEvent) -> bool:
         client = await self._get_client(event)
@@ -2319,20 +2526,46 @@ class Main(Star):
         }
     }
 
+    @staticmethod
+    def _is_gif_url(url: str) -> bool:
+        if not url:
+            return False
+        lower = url.lower()
+        if lower.endswith('.gif'):
+            return True
+        if '.gif?' in lower or '.gif;' in lower:
+            return True
+        return False
+
+    @staticmethod
+    def _is_sticker_image(url: str) -> bool:
+        if not url:
+            return False
+        lower = url.lower()
+        sticker_markers = ['sticker', 'emoji', 'face', 'marketface', 'emoticon']
+        return any(m in lower for m in sticker_markers)
+
     async def _ocr_images(self, event: AiocqhttpMessageEvent, image_urls: list) -> str:
         if not image_urls:
             return ""
         all_ocr_texts = []
         for img_url in image_urls[:3]:
             try:
-                ocr_text = await self._call_llm_ocr(img_url)
+                is_gif = self._is_gif_url(img_url)
+                is_sticker = self._is_sticker_image(img_url)
+                ocr_text = await self._call_llm_ocr(img_url, is_gif=is_gif, is_sticker=is_sticker)
                 if ocr_text and ocr_text.strip():
-                    all_ocr_texts.append(ocr_text.strip())
+                    prefix = ""
+                    if is_gif:
+                        prefix = "[GIF动图] "
+                    elif is_sticker:
+                        prefix = "[表情包] "
+                    all_ocr_texts.append(prefix + ocr_text.strip())
             except Exception as e:
                 logger.debug(f"[GroupMgr] OCR识别失败: {e}")
         return '\n'.join(all_ocr_texts)
 
-    async def _call_llm_ocr(self, image_url: str) -> str:
+    async def _call_llm_ocr(self, image_url: str, is_gif: bool = False, is_sticker: bool = False) -> str:
         configured_id = str(self.config.get("ocr_provider_id", "")).strip()
         if not configured_id:
             return ""
@@ -2348,6 +2581,11 @@ class Main(Star):
             template = self._OCR_PROMPT_TEMPLATES.get(template_key, self._OCR_PROMPT_TEMPLATES["default"])
             system_prompt = template["system"]
             prompt = template["prompt"]
+
+        if is_gif:
+            prompt += "\n注意：这是一张GIF动图，可能包含多帧内容。请仔细观察每一帧，描述所有帧中出现的内容和文字，特别关注是否有违规内容在动画帧中出现。"
+        elif is_sticker:
+            prompt += "\n注意：这是一个表情包/贴纸图片。表情包中常包含文字，请完整转录表情包中的所有文字，并判断文字内容是否违规（如侮辱性脏话、广告推广等）。"
 
         try:
             if hasattr(self.context, 'llm_generate'):
@@ -2397,9 +2635,9 @@ class Main(Star):
         group_id = self._get_group_id(event)
         if not group_id:
             return
-        if self.group_black_list and group_id in self.group_black_list:
+        if self._group_black_set and group_id in self._group_black_set:
             return
-        if self.group_white_list and group_id not in self.group_white_list:
+        if self._group_white_set and group_id not in self._group_white_set:
             return
         if not self._should_scan_message(event):
             return
@@ -2407,9 +2645,9 @@ class Main(Star):
             return
         if await self._is_admin(event):
             return
-        if self.user_black_list:
+        if self._user_black_set:
             user_id = self._try_get_sender_id(event)
-            if user_id and user_id in self.user_black_list:
+            if user_id and user_id in self._user_black_set:
                 try:
                     await self._kick_member(event)
                     await self._mute_member(event, 60)
@@ -2419,38 +2657,28 @@ class Main(Star):
                 except Exception as e:
                     logger.warning(f"[GroupMgr] 黑名单执行出错: {e}")
                 return
-        if self._cfg("recall_qq_favorite_enabled", True):
-            is_qq_fav = await self._check_qq_favorite(event)
-            if is_qq_fav:
-                try:
-                    msg_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', ''))
-                    if msg_id:
-                        await self._recall_msg(event, msg_id)
-                        user_name = event.get_sender_name()
-                        user_id = self._try_get_sender_id(event)
-                        yield event.plain_result(f"[群管] 检测到QQ收藏内容，已自动撤回")
-                        self._log_moderation(group_id, user_id, user_name, "[QQ收藏消息]", "撤回", "QQ收藏内容自动撤回")
-                        event.stop_event()
-                except Exception as e:
-                    logger.warning(f"[GroupMgr] QQ收藏撤回失败: {e}")
-                return
-        if not self.auto_moderate_enabled:
-            return
         chain = event.get_messages()
         raw_text_parts = []
         image_urls = []
         has_forward = False
+        has_sticker = False
         for seg in (chain or []):
             if isinstance(seg, dict):
                 seg_type = seg.get('type', '')
+                seg_data = seg.get('data', {}) or {}
                 if seg_type == 'text':
-                    raw_text_parts.append(seg.get('data', {}).get('text', ''))
+                    raw_text_parts.append(seg_data.get('text', ''))
                 elif seg_type == 'forward':
                     has_forward = True
                 elif seg_type == 'image':
-                    img_url = seg.get('data', {}).get('url', '') or seg.get('data', {}).get('file', '')
+                    img_url = seg_data.get('url', '') or seg_data.get('file', '')
                     if img_url:
                         image_urls.append(img_url)
+                elif seg_type == 'market_face':
+                    has_sticker = True
+                    mf_url = seg_data.get('url', '') or ''
+                    if mf_url:
+                        image_urls.append(mf_url)
             else:
                 seg_cls = type(seg).__name__
                 if seg_cls == 'Plain' or hasattr(seg, 'text'):
@@ -2467,33 +2695,68 @@ class Main(Star):
                         image_urls.append(img_url)
                     else:
                         logger.debug(f"[GroupMgr] Image段无URL: {seg}")
+                elif seg_cls == 'MarketFace' or (hasattr(seg, 'type') and getattr(seg, 'type', '') == 'market_face'):
+                    has_sticker = True
+                    mf_url = getattr(seg, 'url', '') or ''
+                    if not mf_url and hasattr(seg, 'data'):
+                        seg_data = getattr(seg, 'data', {})
+                        if isinstance(seg_data, dict):
+                            mf_url = seg_data.get('url', '') or ''
+                    if mf_url:
+                        image_urls.append(mf_url)
         text = ''.join(raw_text_parts).strip()
 
-        if has_forward and self._cfg("scan_forward_msg", True):
-            forward_text = await self._extract_forward_text(event)
-            if forward_text:
+        forward_text = ""
+        forward_is_qq_favorite = False
+        if has_forward:
+            forward_text, forward_is_qq_favorite = await self._resolve_forward_messages(event)
+            scan_forward = self._cfg("scan_forward_msg", True)
+            if forward_text and scan_forward:
                 if text:
                     text = text + '\n' + forward_text
                 else:
                     text = forward_text
 
+        if self._cfg("recall_qq_favorite_enabled", True):
+            is_qq_fav = forward_is_qq_favorite or await self._check_qq_favorite_non_forward(event)
+            if is_qq_fav:
+                try:
+                    msg_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', ''))
+                    if msg_id:
+                        await self._recall_msg(event, msg_id)
+                        user_name = event.get_sender_name()
+                        user_id = self._try_get_sender_id(event)
+                        yield event.plain_result(f"[群管] 检测到QQ收藏内容，已自动撤回")
+                        self._log_moderation(group_id, user_id, user_name, "[QQ收藏消息]", "撤回", "QQ收藏内容自动撤回")
+                        event.stop_event()
+                except Exception as e:
+                    logger.warning(f"[GroupMgr] QQ收藏撤回失败: {e}")
+                return
+        if not self.auto_moderate_enabled:
+            return
+
         if image_urls and self._cfg("ocr_enabled", False):
-            logger.info(f"[GroupMgr] OCR开始识别 {len(image_urls)} 张图片")
-            ocr_text = await self._ocr_images(event, image_urls)
-            if ocr_text:
-                if text:
-                    text = text + '\n[OCR识图内容]\n' + ocr_text
+            ocr_urls = image_urls
+            if not self._cfg("scan_sticker_enabled", True):
+                ocr_urls = [u for u in image_urls if not self._is_sticker_image(u)]
+            if ocr_urls:
+                logger.info(f"[GroupMgr] OCR开始识别 {len(ocr_urls)} 张图片")
+                ocr_text = await self._ocr_images(event, ocr_urls)
+                if ocr_text:
+                    if text:
+                        text = text + '\n[OCR识图内容]\n' + ocr_text
+                    else:
+                        text = '[OCR识图内容]\n' + ocr_text
+                    logger.info(f"[GroupMgr] OCR识别结果: {ocr_text[:100]}")
                 else:
-                    text = '[OCR识图内容]\n' + ocr_text
-                logger.info(f"[GroupMgr] OCR识别结果: {ocr_text[:100]}")
-            else:
-                logger.warning(f"[GroupMgr] OCR识别返回空结果")
+                    logger.debug(f"[GroupMgr] OCR识别返回空结果")
 
         if not text:
             if image_urls:
                 logger.debug(f"[GroupMgr] 图片消息无文字且OCR未生效，跳过审核")
             return
-        group_id = self._get_group_id(event)
+        if len(text) > 5000:
+            text = text[:5000]
         user_id = self._try_get_sender_id(event)
         user_name = event.get_sender_name()
 
@@ -2515,7 +2778,7 @@ class Main(Star):
             for p in self._compiled_swear:
                 m = p.search(text)
                 if m:
-                    logger.info(f"[GroupMgr] 正则脏话命中: {m.group()} (pattern={p.pattern[:40]}...)")
+                    logger.info(f"[GroupMgr] 正则脏话命中: {m.group()}")
                     swear_hit = True
                     break
         hit_types["swear"] = swear_hit
@@ -2549,7 +2812,7 @@ class Main(Star):
                 logger.warning(f"[GroupMgr] 自动审核出错: {e}")
             return
 
-        llm_result = await self._call_llm_for_moderation(event, text, hit_types)
+        llm_result = await self._call_llm_for_moderation(event, text, hit_types, group_id=group_id)
         is_violation = llm_result.get("violation", False)
         reason = llm_result.get("reason", "无理由")
 
@@ -2704,7 +2967,7 @@ class Main(Star):
                         elif search_type == "black":
                             sender = msg.get('sender', {})
                             uid = str(sender.get('user_id', ''))
-                            is_match = uid in self.user_black_list
+                            is_match = uid in self._user_black_set
                         if not is_match:
                             continue
                     count += 1

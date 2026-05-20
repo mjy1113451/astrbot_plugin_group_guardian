@@ -318,5 +318,11 @@
         "type": "bool",
         "default": true,
         "hint": "开启后检测到QQ收藏转发的消息会自动撤回"
+    },
+    "scan_sticker_enabled": {
+        "description": "表情包/商城表情审核开关",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后会通过OCR识别商城表情图片内容进行审核（需同时开启OCR）"
     }
 }

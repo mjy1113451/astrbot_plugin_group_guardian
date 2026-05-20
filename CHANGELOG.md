@@ -1,5 +1,57 @@
 # Changelog
 
+## [1.9.4] - 2026-05-20
+
+### 重大更新
+
+#### GIF动图审核增强
+- **新增GIF动图识别**：自动检测图片URL是否为GIF格式（`.gif`后缀或URL中包含`.gif`）
+- **GIF专用OCR提示词**：GIF图片送审时自动追加多帧内容识别提示，引导视觉模型关注每一帧的违规内容
+- **GIF审核结果标注**：OCR识别结果前缀标注 `[GIF动图]`，方便区分普通图片和动图
+
+#### 表情包/商城表情审核
+- **新增 `market_face`（商城表情）消息段识别**：之前商城表情完全不被审核，现在会提取图片URL送OCR识别
+- **表情包专用OCR提示词**：商城表情送审时自动追加表情包文字转录和违规判断提示
+- **表情包审核结果标注**：OCR识别结果前缀标注 `[表情包]`
+- **新增 `scan_sticker_enabled` 配置开关**：可独立控制是否审核表情包/商城表情（默认开启）
+- **`_should_scan_message` 新增 `market_face` 类型**：商城表情消息现在会触发审核流程
+- **`_format_message_content` 新增 `market_face` 格式化**：上下文消息中商城表情显示为 `[商城表情]`
+
+### 性能优化
+
+#### 并发安全与高并发场景
+- **LLM审核并发限流**：新增 `asyncio.Semaphore(5)`，限制最多5个并发LLM调用，防止上百群同时触发审核导致API限流/内存爆炸
+- **日志文件原子写入**：`_write_logs_sync` 改用 `tempfile.mkstemp` + `os.replace` 原子写入，防止并发写入导致数据损坏
+- **`asyncio.get_running_loop()` 替换弃用API**：`asyncio.get_event_loop()` 在Python 3.10+已弃用，改用 `get_running_loop()` + `RuntimeError` 回退
+- **管理员角色缓存**：`_is_admin` 不再每次消息都调用 `get_group_member_info` API，添加5分钟TTL内存缓存，上百群场景下API调用量减少99%+
+- **管理员缓存自动清理**：WebUI修改 `admin_list` 时自动清除 `_admin_role_cache`，确保权限变更立即生效
+
+#### 数据结构与算法
+- **日志管理改用 `deque(maxlen=500)`**：自动淘汰旧数据，无需手动截断和重建ID，消除O(n)拷贝
+- **白名单/黑名单改用 `set` 查找**：`_group_white_set`/`_group_black_set`/`_user_black_set`，查找从O(n)降为O(1)
+- **LLM错误去重改用 `set`**：`_call_llm_safe` 中错误去重从 `any(err in list)` O(n²) 优化为 `set` O(1)
+- **统计数据增量缓存**：`_stats_cache` 字典在 `_log_moderation` 中增量更新，WebUI统计API从全量遍历降为O(1)读取
+- **合并转发消息一次解析**：新增 `_resolve_forward_messages` 方法，一次API调用同时提取文本和QQ收藏检测结果，消除重复 `get_forward_msg` 调用
+
+#### IO与资源控制
+- **异步日志写入**：`_save_logs` 使用 `run_in_executor` 在线程池中执行文件写入，不再阻塞事件循环
+- **词库命中日志降级**：`_check_lexicon` 命中日志从 `logger.info` 降为 `logger.debug`，减少高频场景日志IO
+- **上下文消息长度限制**：每条上下文截断200字，总上下文截断3000字，防止提示词过长导致LLM调用失败
+- **`group_id` 参数传递优化**：`_call_llm_for_moderation` 新增 `group_id` 参数，避免重复调用 `_get_group_id`
+
+### 修复
+
+#### AstrBot加载问题（关键）
+- **添加 `@register` 装饰器**：AstrBot要求插件类必须使用 `@register` 注册，之前缺失导致部分场景无法加载
+- **添加 `terminate` 方法**：插件卸载/重载时同步写入未保存的日志，防止防抖期间的数据丢失
+
+#### 逻辑缺陷
+- **`scan_forward_msg` 开关修复**：关闭后转发消息文本不再合并到审核内容，但QQ收藏检测仍正常工作
+- **词库加载路径优化**：优先从 `StarTools.get_data_dir()` 读取自定义词库，防止插件更新时词库被覆盖
+- **`_web_update_config` 白名单/黑名单同步set**：WebUI修改名单时同步更新 `_group_white_set`/`_group_black_set`/`_user_black_set`
+
+---
+
 ## [1.9.3] - 2026-05-20
 
 ### 重大更新
