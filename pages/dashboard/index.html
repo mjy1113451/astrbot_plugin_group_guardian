@@ -985,7 +985,7 @@ function init() {
     if (settingsTab) settingsTab.click();
   });
   $('#openDisclaimer').addEventListener('click', function() {
-    window.open('https://mianze.0n.pub', '_blank', 'noopener,noreferrer');
+    try { window.top.location.href = 'https://mianze.0n.pub'; } catch(e) { window.location.href = 'https://mianze.0n.pub'; }
   });
   $('#modalOverlay').addEventListener('click', function(e) { if (e.target === e.currentTarget) closeModal(); });
 
