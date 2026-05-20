@@ -136,13 +136,14 @@ class Main(Star):
     @staticmethod
     def _write_logs_sync(path: str, data: list) -> None:
         dir_name = os.path.dirname(path)
+        tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(suffix='.json', dir=dir_name)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
             os.replace(tmp_path, path)
         except Exception:
-            if os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             raise
 

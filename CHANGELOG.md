@@ -4,6 +4,7 @@
 
 ### 安全修复
 
+- **`_write_logs_sync` UnboundLocalError 修复**：`tempfile.mkstemp` 抛异常时 `tmp_path` 未赋值，`except` 块中 `os.path.exists(tmp_path)` 触发 `UnboundLocalError` 掩盖原始异常；现初始化 `tmp_path = None` 并在清理前检查
 - **`_web_get_config` 敏感信息泄露修复**：从黑名单过滤改为白名单机制，仅返回 `_conf_schema.json` 中定义的配置项，防止未知命名的敏感字段（如 ak/sk/auth 等）被API暴露
 - **`quart_request` 为None时WebAPI防护**：添加 `_check_quart_available` + `_wrap_web_handler` 包装器，所有Web API在Quart不可用时返回明确错误而非 `AttributeError`
 - **`_save_logs` 同步写入退化修复**：`RuntimeError` 时不再退化执行同步文件写入，改为跳过并警告，避免阻塞事件循环
