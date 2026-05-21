@@ -350,34 +350,41 @@ class Main(Star):
                 return jsonify({"status": "error", "message": "无效的日志ID"})
             for log in self._moderation_logs:
                 if log.get("id") == target_id:
-                    return jsonify({
+                    msg = log.get("msg_text", "")
+                    logger.info(f"[GroupMgr] log_detail id={target_id} msg_text_len={len(msg)}")
+                    resp = jsonify({
                         "status": "success",
                         "data": {
-                            "msg_text": log.get("msg_text", ""),
+                            "msg_text": msg,
                             "image_urls": log.get("image_urls", []),
                             "reason": log.get("reason", ""),
                             "action": log.get("action", ""),
                         }
                     })
+                    resp.headers["Access-Control-Allow-Origin"] = "*"
+                    return resp
             return jsonify({"status": "error", "message": "未找到该日志"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
 
     async def _web_log_raw_text(self):
+        _cors = {"Access-Control-Allow-Origin": "*", "Content-Type": "text/plain; charset=utf-8"}
         try:
             log_id = quart_request.args.get("id", "").strip()
             if not log_id:
-                return "缺少日志ID", 400, {"Content-Type": "text/plain; charset=utf-8"}
+                return "缺少日志ID", 400, _cors
             try:
                 target_id = int(log_id)
             except (ValueError, TypeError):
-                return "无效的日志ID", 400, {"Content-Type": "text/plain; charset=utf-8"}
+                return "无效的日志ID", 400, _cors
             for log in self._moderation_logs:
                 if log.get("id") == target_id:
-                    return log.get("msg_text", ""), 200, {"Content-Type": "text/plain; charset=utf-8"}
-            return "未找到该日志", 404, {"Content-Type": "text/plain; charset=utf-8"}
+                    raw = log.get("msg_text", "")
+                    logger.info(f"[GroupMgr] log_raw_text id={target_id} len={len(raw)}")
+                    return raw, 200, _cors
+            return "未找到该日志", 404, _cors
         except Exception as e:
-            return str(e), 500, {"Content-Type": "text/plain; charset=utf-8"}
+            return str(e), 500, _cors
 
     async def _web_get_moderation_users(self):
         logs = list(self._moderation_logs)
