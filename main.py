@@ -99,7 +99,8 @@ class Main(Star):
             schema_path = os.path.join(os.path.dirname(__file__), "_conf_schema.json")
             with open(schema_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[GroupMgr] 加载配置schema失败: {e}")
             return {}
 
     def _logs_path(self) -> str:
@@ -425,7 +426,7 @@ class Main(Star):
             return jsonify({"status": "error", "message": "无法获取QQ客户端，请确保已连接"})
         try:
             result = await client.call_action('get_group_list')
-            groups = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            groups = self._extract_list_result(result)
             today_start = self._today_start()
             white_set = self._group_white_set
             today_blocked_map = {}
@@ -463,7 +464,7 @@ class Main(Star):
         try:
             gid = self._safe_int(group_id, 0)
             result = await client.call_action('get_group_member_list', group_id=gid, no_cache=True)
-            members = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            members = self._extract_list_result(result)
             enriched = []
             admin_set = set(str(a).strip() for a in self.config.get("admin_list", []) if a)
             for m in members:
@@ -593,10 +594,7 @@ class Main(Star):
             user_id = str(data.get("user_id", "")).strip()
             if not user_id:
                 return jsonify({"status": "error", "message": "缺少 user_id"})
-            admin_list = self.config.get("admin_list", [])
-            if not isinstance(admin_list, list):
-                admin_list = []
-            admin_list = [str(a).strip() for a in admin_list if a]
+            admin_list = self._get_admin_list()
             if user_id not in admin_list:
                 admin_list.append(user_id)
                 self.config["admin_list"] = admin_list
@@ -612,10 +610,7 @@ class Main(Star):
             user_id = str(data.get("user_id", "")).strip()
             if not user_id:
                 return jsonify({"status": "error", "message": "缺少 user_id"})
-            admin_list = self.config.get("admin_list", [])
-            if not isinstance(admin_list, list):
-                admin_list = []
-            admin_list = [str(a).strip() for a in admin_list if a]
+            admin_list = self._get_admin_list()
             if user_id in admin_list:
                 self._safe_list_remove(admin_list, user_id)
                 self.config["admin_list"] = admin_list
@@ -693,6 +688,20 @@ class Main(Star):
             return int(value)
         except (ValueError, TypeError):
             return default
+
+    def _get_admin_list(self) -> list:
+        admin_list = self.config.get("admin_list", [])
+        if not isinstance(admin_list, list):
+            admin_list = []
+        return [str(a).strip() for a in admin_list if a]
+
+    @staticmethod
+    def _extract_list_result(result) -> list:
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("data") or result.get("notices") or []
+        return []
 
     @staticmethod
     def _build_combined_regex(patterns: list, chunk_size: int = 500) -> list:
@@ -1270,7 +1279,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_member_list', group_id=gid)
-            members = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            members = self._extract_list_result(result)
             if not members:
                 yield event.plain_result("群成员列表为空")
                 return
@@ -1381,7 +1390,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_shut_list', group_id=gid)
-            shut_list = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            shut_list = self._extract_list_result(result)
             if not shut_list:
                 yield event.plain_result("当前没有禁言成员")
                 return
@@ -1412,11 +1421,11 @@ class Main(Star):
             yield event.plain_result(err)
             return
         try:
-            group_id, client, gid, err = await self._get_group_client(event, need_gid=True)
+            _, client, gid, err = await self._get_group_client(event, need_gid=True)
             if not client:
                 yield event.plain_result(err)
                 return
-            type_map = {"allow": 2, "deny": 1, "need_verify": 3, "not_allow": 4}
+            type_map = {"allow": 2, "deny": 3, "need_verify": 1, "not_allow": 3}
             add_type = type_map.get(verify_type.lower(), 2)
             ok, err = await self._call_group_api(client, 'set_group_add_option', "设置加群方式", group_id=gid, add_type=add_type)
             if not ok:
@@ -1439,7 +1448,7 @@ class Main(Star):
             yield event.plain_result(err)
             return
         try:
-            group_id, client, err = await self._get_group_client(event)
+            _, client, err = await self._get_group_client(event)
             if not client:
                 yield event.plain_result(err)
                 return
@@ -1543,7 +1552,7 @@ class Main(Star):
             yield event.plain_result(err)
             return
         try:
-            group_id, client, gid, err = await self._get_group_client(event, need_gid=True)
+            _, client, gid, err = await self._get_group_client(event, need_gid=True)
             if not client:
                 yield event.plain_result(err)
                 return
@@ -1605,7 +1614,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('_get_group_notice', group_id=gid)
-            notices = (result.get('data') or []) if isinstance(result, dict) else result
+            notices = self._extract_list_result(result)
             if not notices:
                 yield event.plain_result("暂无公告")
                 return
@@ -1662,7 +1671,8 @@ class Main(Star):
                 group_id=gid, message_seq=0, count=min(count + 5, 100))
             messages = result.get('messages', []) if isinstance(result, dict) else []
             return [m for m in messages if str(m.get('message_id', '')) != str(current_msg_id)][-count:]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[GroupMgr] 获取上下文消息失败: {e}")
             return []
 
     def _extract_llm_text(self, response) -> str:
@@ -1987,7 +1997,7 @@ class Main(Star):
                 for msg in messages:
                     if not isinstance(msg, dict):
                         continue
-                    sender = msg.get('sender', {})
+                    sender = msg.get('sender') or {}
                     nickname = sender.get('nickname', '未知') if isinstance(sender, dict) else '未知'
                     card = sender.get('card', '') if isinstance(sender, dict) else ''
                     content = msg.get('message', '')
@@ -2540,13 +2550,13 @@ class Main(Star):
                         elif search_type == "sensitive":
                             is_match = any(p.search(text) for p in self._compiled_lexicon.get("political", []))
                         elif search_type == "black":
-                            sender = msg.get('sender', {})
+                            sender = msg.get('sender') or {}
                             uid = str(sender.get('user_id', ''))
                             is_match = uid in self._user_black_set
                         if not is_match:
                             continue
                     count += 1
-                    sender = msg.get('sender', {})
+                    sender = msg.get('sender') or {}
                     nickname = sender.get('nickname', '未知')
                     sample_messages.append(f"{nickname}: {text[:50]}")
             except Exception:
@@ -2561,12 +2571,12 @@ class Main(Star):
             yield event.plain_result(err)
             return
         try:
-            group_id, client, gid, err = await self._get_group_client(event, need_gid=True)
+            _, client, gid, err = await self._get_group_client(event, need_gid=True)
             if not client:
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_member_list', group_id=gid)
-            members = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            members = self._extract_list_result(result)
             total = len(members)
             admins = sum(1 for m in members if m.get('role') in ('admin', 'owner'))
             owners = sum(1 for m in members if m.get('role') == 'owner')
@@ -2601,7 +2611,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_member_list', group_id=gid)
-            members = result if isinstance(result, list) else (result.get("data") or []) if isinstance(result, dict) else []
+            members = self._extract_list_result(result)
             matched = []
             for m in members:
                 card = m.get("card", "")
@@ -2662,8 +2672,8 @@ class Main(Star):
                     try:
                         await client.call_action('delete_msg', message_id=msg_id)
                         recalled += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[GroupMgr] 撤回消息{msg_id}失败: {e}")
             yield event.plain_result(f"已尝试撤回 {recalled} 条消息")
         except Exception as e:
             yield event.plain_result(f"撤回失败: {e}")
@@ -2883,14 +2893,14 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('_get_group_notice', group_id=gid)
-            notices = result.get("notices", []) if isinstance(result, dict) else []
+            notices = self._extract_list_result(result)
             if not notices:
                 yield event.plain_result("暂无群公告")
                 return
             lines = [f"📋 群公告列表 ({len(notices)}条):"]
             for n in notices[:10]:
                 nid = n.get("notice_id", n.get("id", ""))
-                pub = n.get("publisher", {})
+                pub = n.get("publisher") or {}
                 name = pub.get("nickname", "未知")
                 title = n.get("title", n.get("content", ""))[:40]
                 lines.append(f"  ID:{nid} | {name}: {title}")
@@ -2998,7 +3008,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_shut_list', group_id=gid)
-            banned = result if isinstance(result, list) else []
+            banned = self._extract_list_result(result)
             if not banned:
                 yield event.plain_result("当前无人被禁言")
                 return
@@ -3164,7 +3174,7 @@ class Main(Star):
             yield event.plain_result(err)
             return
         args = event.message_str.split()
-        method_map = {"需要验证": 1, "允许": 0, "禁止": 2, "免审核": 0}
+        method_map = {"需要验证": 1, "允许": 2, "禁止": 3, "免审核": 2}
         if len(args) < 2:
             yield event.plain_result("用法: /加群方式 <方法>\n方法: 需要验证/允许/禁止\n示例: /加群方式 需要验证")
             return
@@ -3219,10 +3229,7 @@ class Main(Star):
             return
         user_id = str(args[1]).strip()
         action = "添加" if len(args) < 3 else args[2].strip()
-        admin_list = self.config.get("admin_list", [])
-        if not isinstance(admin_list, list):
-            admin_list = []
-        admin_list = [str(a).strip() for a in admin_list if a]
+        admin_list = self._get_admin_list()
         if action == "移除":
             if user_id in admin_list:
                 self._safe_list_remove(admin_list, user_id)
@@ -3275,7 +3282,7 @@ class Main(Star):
             for msg in messages:
                 if recalled >= count:
                     break
-                sender = msg.get('sender', {})
+                sender = msg.get('sender') or {}
                 uid = str(sender.get('user_id', ''))
                 if target_user and uid != target_user:
                     continue
@@ -3284,8 +3291,8 @@ class Main(Star):
                     try:
                         await client.call_action('delete_msg', message_id=msg_id)
                         recalled += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"[GroupMgr] 撤回消息{msg_id}失败: {e}")
             filter_desc = f"（用户{target_user}）" if target_user else ""
             yield event.plain_result(f"已尝试撤回 {recalled} 条消息{filter_desc}")
         except Exception as e:
