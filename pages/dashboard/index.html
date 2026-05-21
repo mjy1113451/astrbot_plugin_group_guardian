@@ -888,7 +888,7 @@ function renderUsers(users) {
       try {
         var detail = await safeGet('log_detail', { id: lid });
         if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
-        var d = detail || {};
+        var d = (detail && detail.data) ? detail.data : (detail || {});
         var fullText = d.msg_text || '';
         var imgUrls = d.image_urls || [];
         var imgHtml = '';
@@ -936,7 +936,7 @@ async function loadLogs() {
       try {
         var detail = await safeGet('log_detail', { id: lid });
         if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
-        var d = detail || {};
+        var d = (detail && detail.data) ? detail.data : (detail || {});
         var fullText = d.msg_text || '';
         var imgUrls = d.image_urls || [];
         var imgHtml = '';
