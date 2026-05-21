@@ -985,7 +985,21 @@ function init() {
     if (settingsTab) settingsTab.click();
   });
   $('#openDisclaimer').addEventListener('click', function() {
-    try { window.top.location.href = 'https://mianze.0n.pub'; } catch(e) { window.location.href = 'https://mianze.0n.pub'; }
+    var url = 'https://mianze.0n.pub';
+    try { window.top.location.href = url; } catch(e1) {
+      try { window.open(url); } catch(e2) {
+        window.location.href = url;
+      }
+    }
+  });
+  $('#disclaimerAgreed').addEventListener('change', function() {
+    var agreed = this.checked;
+    var card = $('#disclaimerCard');
+    var label = $('#disclaimerLabel');
+    if (card) card.style.borderColor = agreed ? 'var(--success)' : 'var(--warning)';
+    if (card) card.querySelector('.card-header').style.background = agreed ? 'var(--success-light)' : 'var(--warning-light)';
+    if (card) card.querySelector('.card-header h2').style.color = agreed ? 'var(--success)' : 'var(--warning)';
+    if (label) label.textContent = agreed ? '已同意免责声明' : '我已阅读并同意免责声明';
   });
   $('#modalOverlay').addEventListener('click', function(e) { if (e.target === e.currentTarget) closeModal(); });
 
