@@ -855,7 +855,7 @@ function renderUsers(users) {
           var mid = 'uf' + (_msgIdx++);
           _msgStore[mid] = { text: msgFull, imgs: imgUrls };
           var msgCell = (r.msg_preview && r.msg_preview.length > 20) ?
-            '<td><span class="lin-msg-truncated">' + esc(r.msg_preview.slice(0, 20)) + '</span> <a href="javascript:void(0)" class="lin-msg-action" data-lin-mid="' + mid + '"><svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span class="lin-msg-action-text">查看</span></a></td>' :
+            '<td><span class="lin-msg-truncated">' + esc(r.msg_preview.slice(0, 20)) + '</span> <a href="javascript:void(0)" class="lin-msg-action" data-log-id="' + esc(String(r.id)) + '"><svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span class="lin-msg-action-text">查看</span></a></td>' :
             '<td>' + esc(r.msg_preview || '') + '</td>';
           return '<tr><td>' + fmtTime(r.ts) + '</td><td>' + esc(r.group_id) + '</td>' + msgCell + '<td>' + esc((r.reason || '').slice(0, 20)) + '</td><td><button class="btn btn-danger btn-sm" data-del="' + esc(r.id) + '">删除</button></td></tr>';
         }).join('') + '</tbody></table></div></div>';
@@ -880,22 +880,27 @@ function renderUsers(users) {
   });
 
   c.querySelectorAll('.lin-msg-action').forEach(function(action) {
-    action.addEventListener('click', function(e) {
+    action.addEventListener('click', async function(e) {
       e.stopPropagation();
-      var mid = this.getAttribute('data-lin-mid');
-      var data = _msgStore[mid] || {};
-      var fullText = data.text || '';
-      var imgUrls = data.imgs || [];
-      var imgHtml = '';
-      if (imgUrls.length) {
-        imgUrls.forEach(function(u) {
-          if (u) imgHtml += '<div class="msg-img-wrap"><img src="' + escAttr(u) + '" style="max-width:100%;border-radius:6px;cursor:pointer;display:block" onclick="window.open(this.src)" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'" /><div style="display:none;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;color:var(--text-muted);font-size:12px;text-align:center">图片链接已过期</div></div>';
-        });
-      }
-      var bodyHtml = (imgHtml ? '<div style="margin-bottom:12px">' + imgHtml + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">图片链接可能随时间过期，点击图片可在新窗口查看原图</div></div>' : '') +
-        '<div style="white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:13px;color:var(--text-primary)">' + esc(fullText) + '</div>';
-      showModal('消息详情', bodyHtml, '<button class="btn btn-ghost btn-sm" id="btnMsgClose2">关闭</button>');
+      var lid = this.getAttribute('data-log-id');
+      showModal('消息详情', '<p style="color:var(--text-muted)">加载中...</p>', '<button class="btn btn-ghost btn-sm" id="btnMsgClose2">关闭</button>');
       $('#btnMsgClose2').addEventListener('click', closeModal);
+      try {
+        var detail = await safeGet('log_detail', { id: lid });
+        if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
+        var d = detail || {};
+        var fullText = d.msg_text || '';
+        var imgUrls = d.image_urls || [];
+        var imgHtml = '';
+        if (imgUrls.length) {
+          imgUrls.forEach(function(u) {
+            if (u) imgHtml += '<div class="msg-img-wrap"><img src="' + escAttr(u) + '" style="max-width:100%;border-radius:6px;cursor:pointer;display:block" onclick="window.open(this.src)" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'" /><div style="display:none;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;color:var(--text-muted);font-size:12px;text-align:center">图片链接已过期</div></div>';
+          });
+        }
+        var bodyHtml = (imgHtml ? '<div style="margin-bottom:12px">' + imgHtml + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">图片链接可能随时间过期，点击图片可在新窗口查看原图</div></div>' : '') +
+          '<div style="white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:13px;color:var(--text-primary)">' + esc(fullText) + '</div>';
+        $('#modalBody').innerHTML = bodyHtml;
+      } catch(ex) { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">加载失败: ' + esc(String(ex)) + '</p>'; }
     });
   });
 }
@@ -917,28 +922,33 @@ async function loadLogs() {
     var mid = 'mf' + (_msgIdx++);
     _msgStore[mid] = { text: msgFull, imgs: imgUrls };
     var msgHtml = (l.msg_preview && l.msg_preview.length > 28) ?
-      '<span class="lin-msg-truncated">' + esc(l.msg_preview.slice(0, 28)) + '</span><a href="javascript:void(0)" class="lin-msg-action" data-lin-mid="' + mid + '"><svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span class="lin-msg-action-text">查看</span></a>' :
+      '<span class="lin-msg-truncated">' + esc(l.msg_preview.slice(0, 28)) + '</span><a href="javascript:void(0)" class="lin-msg-action" data-log-id="' + esc(String(l.id)) + '"><svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg><span class="lin-msg-action-text">查看</span></a>' :
       esc(l.msg_preview || '');
     return '<tr><td>' + fmtTime(l.ts) + '</td><td>' + esc(l.group_id) + '</td><td>' + esc(l.user_name) + '<br><span style="font-size:10px;color:var(--text-muted)">' + esc(l.user_id) + '</span></td><td>' + msgHtml + '</td><td><span class="badge ' + cls + '">' + esc(a) + '</span></td><td class="reason-cell" title="' + esc(l.reason) + '">' + esc((l.reason || '').slice(0, 30)) + '</td></tr>';
   }).join('');
   c.innerHTML = '<table class="log-table"><thead><tr><th>时间</th><th>群号</th><th>用户</th><th>消息</th><th>操作</th><th>原因</th></tr></thead><tbody>' + rows + '</tbody></table>';
   c.querySelectorAll('.lin-msg-action').forEach(function(action) {
-    action.addEventListener('click', function(e) {
+    action.addEventListener('click', async function(e) {
       e.stopPropagation();
-      var mid = this.getAttribute('data-lin-mid');
-      var data = _msgStore[mid] || {};
-      var fullText = data.text || '';
-      var imgUrls = data.imgs || [];
-      var imgHtml = '';
-      if (imgUrls.length) {
-        imgUrls.forEach(function(u) {
-          if (u) imgHtml += '<div class="msg-img-wrap"><img src="' + escAttr(u) + '" style="max-width:100%;border-radius:6px;cursor:pointer;display:block" onclick="window.open(this.src)" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'" /><div style="display:none;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;color:var(--text-muted);font-size:12px;text-align:center">图片链接已过期</div></div>';
-        });
-      }
-      var bodyHtml = (imgHtml ? '<div style="margin-bottom:12px">' + imgHtml + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">图片链接可能随时间过期，点击图片可在新窗口查看原图</div></div>' : '') +
-        '<div style="white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:13px;color:var(--text-primary)">' + esc(fullText) + '</div>';
-      showModal('消息详情', bodyHtml, '<button class="btn btn-ghost btn-sm" id="btnMsgClose">关闭</button>');
+      var lid = this.getAttribute('data-log-id');
+      showModal('消息详情', '<p style="color:var(--text-muted)">加载中...</p>', '<button class="btn btn-ghost btn-sm" id="btnMsgClose">关闭</button>');
       $('#btnMsgClose').addEventListener('click', closeModal);
+      try {
+        var detail = await safeGet('log_detail', { id: lid });
+        if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
+        var d = detail || {};
+        var fullText = d.msg_text || '';
+        var imgUrls = d.image_urls || [];
+        var imgHtml = '';
+        if (imgUrls.length) {
+          imgUrls.forEach(function(u) {
+            if (u) imgHtml += '<div class="msg-img-wrap"><img src="' + escAttr(u) + '" style="max-width:100%;border-radius:6px;cursor:pointer;display:block" onclick="window.open(this.src)" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'block\'" /><div style="display:none;padding:8px 12px;background:var(--bg-secondary);border-radius:6px;color:var(--text-muted);font-size:12px;text-align:center">图片链接已过期</div></div>';
+          });
+        }
+        var bodyHtml = (imgHtml ? '<div style="margin-bottom:12px">' + imgHtml + '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">图片链接可能随时间过期，点击图片可在新窗口查看原图</div></div>' : '') +
+          '<div style="white-space:pre-wrap;word-break:break-word;line-height:1.7;font-size:13px;color:var(--text-primary)">' + esc(fullText) + '</div>';
+        $('#modalBody').innerHTML = bodyHtml;
+      } catch(ex) { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">加载失败: ' + esc(String(ex)) + '</p>'; }
     });
   });
 }

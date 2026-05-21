@@ -172,6 +172,7 @@ class Main(Star):
                 ("/moderation_users", self._web_get_moderation_users, ["GET"], "获取被撤回用户聚合列表"),
                 ("/logs/delete", self._web_delete_logs, ["POST"], "批量删除审核日志"),
                 ("/logs/export", self._web_export_logs, ["GET"], "导出审核日志"),
+                ("/log_detail", self._web_log_detail, ["GET"], "获取单条日志详情"),
                 ("/groups", self._web_get_groups, ["GET"], "获取群列表"),
                 ("/group_members", self._web_get_group_members, ["GET"], "获取群成员列表"),
                 ("/whitelist/add", self._web_whitelist_add, ["POST"], "添加群白名单"),
@@ -336,6 +337,30 @@ class Main(Star):
             limit = 50
         logs = list(self._moderation_logs)[-limit:]
         return jsonify({"status": "success", "data": logs})
+
+    async def _web_log_detail(self):
+        try:
+            log_id = quart_request.args.get("id", "").strip()
+            if not log_id:
+                return jsonify({"status": "error", "message": "缺少日志ID"})
+            try:
+                target_id = int(log_id)
+            except (ValueError, TypeError):
+                return jsonify({"status": "error", "message": "无效的日志ID"})
+            for log in self._moderation_logs:
+                if log.get("id") == target_id:
+                    return jsonify({
+                        "status": "success",
+                        "data": {
+                            "msg_text": log.get("msg_text", ""),
+                            "image_urls": log.get("image_urls", []),
+                            "reason": log.get("reason", ""),
+                            "action": log.get("action", ""),
+                        }
+                    })
+            return jsonify({"status": "error", "message": "未找到该日志"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
 
     async def _web_get_moderation_users(self):
         logs = list(self._moderation_logs)
