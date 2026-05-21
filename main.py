@@ -370,6 +370,7 @@ class Main(Star):
                     "msg_text": log.get("msg_text", ""),
                     "action": log.get("action", ""),
                     "reason": log.get("reason", ""),
+                    "image_urls": log.get("image_urls", []),
                 })
         users = sorted(user_map.values(), key=lambda x: x["count"], reverse=True)
         return jsonify({"status": "success", "data": users})
