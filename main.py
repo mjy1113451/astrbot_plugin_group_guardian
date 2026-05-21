@@ -28,7 +28,7 @@ from .patterns import _POLITICAL_WHITELIST, SWEAR_PATTERNS, AD_PATTERNS
 _PLUGIN_NAME = "astrbot_plugin_group_guardian"
 
 
-@register("astrbot_plugin_group_guardian", "zhaisir", "QQ群智能守护者 - AI审核+群管工具集", "v1.9.6", "https://github.com/zcj-ui/astrbot_plugin_group_guardian")
+@register("astrbot_plugin_group_guardian", "zhaisir", "QQ群智能守护者 - AI审核+群管工具集", "v1.9.7", "https://github.com/zcj-ui/astrbot_plugin_group_guardian")
 class Main(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
@@ -216,7 +216,7 @@ class Main(Star):
             sc.update(today_start=today_start, blocked=today_blocked, passed=today_passed, total=today_total)
         stats = {
             "plugin_name": _PLUGIN_NAME,
-            "version": "v1.9.6",
+            "version": "v1.9.7",
             "disclaimer_agreed": self.config.get("disclaimer_agreed", False),
             "auto_moderate_enabled": self.auto_moderate_enabled,
             "group_white_list_count": len(self.group_white_list),

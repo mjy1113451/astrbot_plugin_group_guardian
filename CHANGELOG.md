@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.9.7] - 2026-05-21
+
+### WebUI 全面重构
+
+- **Linear/Vercel 简约风格**：CSS 全面替换为极简风格（细边框/大量留白/精致 Toggle/下划线链接按钮）
+- **暗色模式**：CSS 变量体系（`:root` 亮色 + `[data-theme="dark"]` 暗色），侧边栏底部切换按钮，`ls` 包装器兼容 iframe 沙箱 localStorage 禁用
+- **移动端优化**：新增底部导航栏（600px 以下替代隐藏的侧边栏），40+ 条移动端 CSS 适配规则，表格横向滚动，输入框/按钮全宽布局
+- **消息展开**：审核日志和被撤回用户记录的长消息支持点击展开/收起完整内容
+- **免责声明卡片重构**：Linear 风格（6px 圆点状态/下划线链接/36x20px Toggle/底部 hint）
+- **免责声明横幅同步**：勾选同意后总览页横幅实时隐藏
+
+### Bug 修复
+
+- **`bridge.ready()` 挂起修复**：先绑定 `apiGet`/`apiPost` 再调 `ready()`，加 5 秒超时（`Promise.race`），超时后仍正常初始化
+- **`localStorage` 沙箱禁用修复**：新增 `ls` 包装器，iframe 沙箱环境自动降级为内存存储
+- **免责声明链接跳转修复**：`<a target="_blank">` 改为 `window.top.location.href` → `window.open` → `window.location.href` 三级降级
+- **`renderListTags` 硬编码颜色修复**：`color:#909399` 改为 `color:var(--text-muted)` 适配暗色模式
+- **消息展开查询范围修复**：`document.querySelectorAll` 改为容器内 `c.querySelectorAll`
+- **展开消息宽度限制修复**：展开时移除 `max-width` 限制，`lin-msg-full` 最大宽度从 380px 增至 500px
+
 ## [1.9.6] - 2026-05-20
 
 ### 免责声明机制
