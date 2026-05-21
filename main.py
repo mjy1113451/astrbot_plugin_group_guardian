@@ -173,6 +173,7 @@ class Main(Star):
                 ("/logs/delete", self._web_delete_logs, ["POST"], "批量删除审核日志"),
                 ("/logs/export", self._web_export_logs, ["GET"], "导出审核日志"),
                 ("/log_detail", self._web_log_detail, ["GET"], "获取单条日志详情"),
+                ("/log_raw_text", self._web_log_raw_text, ["GET"], "获取日志原始文本"),
                 ("/groups", self._web_get_groups, ["GET"], "获取群列表"),
                 ("/group_members", self._web_get_group_members, ["GET"], "获取群成员列表"),
                 ("/whitelist/add", self._web_whitelist_add, ["POST"], "添加群白名单"),
@@ -361,6 +362,22 @@ class Main(Star):
             return jsonify({"status": "error", "message": "未找到该日志"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
+
+    async def _web_log_raw_text(self):
+        try:
+            log_id = quart_request.args.get("id", "").strip()
+            if not log_id:
+                return "缺少日志ID", 400, {"Content-Type": "text/plain; charset=utf-8"}
+            try:
+                target_id = int(log_id)
+            except (ValueError, TypeError):
+                return "无效的日志ID", 400, {"Content-Type": "text/plain; charset=utf-8"}
+            for log in self._moderation_logs:
+                if log.get("id") == target_id:
+                    return log.get("msg_text", ""), 200, {"Content-Type": "text/plain; charset=utf-8"}
+            return "未找到该日志", 404, {"Content-Type": "text/plain; charset=utf-8"}
+        except Exception as e:
+            return str(e), 500, {"Content-Type": "text/plain; charset=utf-8"}
 
     async def _web_get_moderation_users(self):
         logs = list(self._moderation_logs)

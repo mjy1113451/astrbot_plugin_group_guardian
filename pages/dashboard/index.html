@@ -886,10 +886,11 @@ function renderUsers(users) {
       showModal('消息详情', '<p style="color:var(--text-muted)">加载中...</p>', '<button class="btn btn-ghost btn-sm" id="btnMsgClose2">关闭</button>');
       $('#btnMsgClose2').addEventListener('click', closeModal);
       try {
+        var r = await fetch('/astrbot_plugin_group_guardian/log_raw_text?id=' + encodeURIComponent(lid));
+        var fullText = await r.text();
+        if (!r.ok) { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(fullText || '获取失败') + '</p>'; return; }
         var detail = await safeGet('log_detail', { id: lid });
-        if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
-        var d = (detail && detail.data) ? detail.data : (detail || {});
-        var fullText = d.msg_text || '';
+        var d = (detail && detail.data) ? detail.data : {};
         var imgUrls = d.image_urls || [];
         var imgHtml = '';
         if (imgUrls.length) {
@@ -934,10 +935,11 @@ async function loadLogs() {
       showModal('消息详情', '<p style="color:var(--text-muted)">加载中...</p>', '<button class="btn btn-ghost btn-sm" id="btnMsgClose">关闭</button>');
       $('#btnMsgClose').addEventListener('click', closeModal);
       try {
+        var r = await fetch('/astrbot_plugin_group_guardian/log_raw_text?id=' + encodeURIComponent(lid));
+        var fullText = await r.text();
+        if (!r.ok) { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(fullText || '获取失败') + '</p>'; return; }
         var detail = await safeGet('log_detail', { id: lid });
-        if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
-        var d = (detail && detail.data) ? detail.data : (detail || {});
-        var fullText = d.msg_text || '';
+        var d = (detail && detail.data) ? detail.data : {};
         var imgUrls = d.image_urls || [];
         var imgHtml = '';
         if (imgUrls.length) {
