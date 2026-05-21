@@ -354,6 +354,7 @@ class Main(Star):
                     msg = log.get("msg_text", "")
                     chunk_size = 400
                     chunk_count = (len(msg) + chunk_size - 1) // chunk_size if msg else 0
+                    logger.info(f"[GroupMgr] log_detail id={target_id} msg_len={len(msg)} chunk_count={chunk_count}")
                     return jsonify({
                         "status": "success",
                         "data": {
@@ -388,6 +389,7 @@ class Main(Star):
                     chunk_size = 400
                     start = idx * chunk_size
                     piece = msg[start:start + chunk_size]
+                    logger.info(f"[GroupMgr] log_chunk id={target_id} chunk={idx} piece_len={len(piece)} total_msg_len={len(msg)}")
                     return jsonify({"status": "success", "data": {"i": idx, "t": piece}})
             return jsonify({"status": "error", "message": "未找到该日志"})
         except Exception as e:
@@ -1128,6 +1130,7 @@ class Main(Star):
         self._stats_cache.pop("user_names", None)
 
     def _log_moderation(self, group_id: str, user_id: str, user_name: str, msg_text: str, action: str, reason: str = "", image_urls: list = None):
+        logger.info(f"[GroupMgr] _log_moderation msg_text_len={len(msg_text)} action={action}")
         valid_urls = [u for u in (image_urls or []) if u][:5]
         log_entry = {
             "id": len(self._moderation_logs),

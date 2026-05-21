@@ -887,16 +887,20 @@ function renderUsers(users) {
       $('#btnMsgClose2').addEventListener('click', closeModal);
       try {
         var detail = await safeGet('log_detail', { id: lid });
+        console.log('[GG] detail:', JSON.stringify(detail).slice(0, 500));
         if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
         var d = detail || {};
         var chunkCount = d.chunk_count || 0;
+        console.log('[GG] chunk_count=' + chunkCount + ' total_len=' + (d.total_len || 0));
         var imgUrls = d.image_urls || [];
         var parts = [];
         for (var ci = 0; ci < chunkCount; ci++) {
           var cr = await safeGet('log_chunk', { id: lid, chunk: ci });
+          console.log('[GG] chunk[' + ci + '] len=' + (cr && cr.t ? cr.t.length : 0) + ' raw=' + JSON.stringify(cr).slice(0, 200));
           if (cr && cr.t) parts.push(cr.t);
         }
         var fullText = parts.join('');
+        console.log('[GG] final len=' + fullText.length + ' last80=' + fullText.slice(-80));
         var imgHtml = '';
         if (imgUrls.length) {
           imgUrls.forEach(function(u) {
@@ -941,16 +945,20 @@ async function loadLogs() {
       $('#btnMsgClose').addEventListener('click', closeModal);
       try {
         var detail = await safeGet('log_detail', { id: lid });
+        console.log('[GG2] detail:', JSON.stringify(detail).slice(0, 500));
         if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
         var d = detail || {};
         var chunkCount = d.chunk_count || 0;
+        console.log('[GG2] chunk_count=' + chunkCount + ' total_len=' + (d.total_len || 0));
         var imgUrls = d.image_urls || [];
         var parts = [];
         for (var ci = 0; ci < chunkCount; ci++) {
           var cr = await safeGet('log_chunk', { id: lid, chunk: ci });
+          console.log('[GG2] chunk[' + ci + '] len=' + (cr && cr.t ? cr.t.length : 0) + ' raw=' + JSON.stringify(cr).slice(0, 200));
           if (cr && cr.t) parts.push(cr.t);
         }
         var fullText = parts.join('');
+        console.log('[GG2] final len=' + fullText.length + ' last80=' + fullText.slice(-80));
         var imgHtml = '';
         if (imgUrls.length) {
           imgUrls.forEach(function(u) {
