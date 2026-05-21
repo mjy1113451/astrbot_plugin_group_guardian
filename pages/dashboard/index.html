@@ -889,9 +889,14 @@ function renderUsers(users) {
         var detail = await safeGet('log_detail', { id: lid });
         if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
         var d = detail || {};
-        var chunks = d.chunks || [];
-        var fullText = chunks.join('');
+        var chunkCount = d.chunk_count || 0;
         var imgUrls = d.image_urls || [];
+        var parts = [];
+        for (var ci = 0; ci < chunkCount; ci++) {
+          var cr = await safeGet('log_chunk', { id: lid, chunk: ci });
+          if (cr && cr.t) parts.push(cr.t);
+        }
+        var fullText = parts.join('');
         var imgHtml = '';
         if (imgUrls.length) {
           imgUrls.forEach(function(u) {
@@ -938,9 +943,14 @@ async function loadLogs() {
         var detail = await safeGet('log_detail', { id: lid });
         if (detail && detail.status === 'error') { $('#modalBody').innerHTML = '<p style="color:var(--text-muted)">' + esc(detail.message || '获取失败') + '</p>'; return; }
         var d = detail || {};
-        var chunks = d.chunks || [];
-        var fullText = chunks.join('');
+        var chunkCount = d.chunk_count || 0;
         var imgUrls = d.image_urls || [];
+        var parts = [];
+        for (var ci = 0; ci < chunkCount; ci++) {
+          var cr = await safeGet('log_chunk', { id: lid, chunk: ci });
+          if (cr && cr.t) parts.push(cr.t);
+        }
+        var fullText = parts.join('');
         var imgHtml = '';
         if (imgUrls.length) {
           imgUrls.forEach(function(u) {

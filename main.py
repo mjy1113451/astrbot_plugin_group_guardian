@@ -173,6 +173,7 @@ class Main(Star):
                 ("/logs/delete", self._web_delete_logs, ["POST"], "批量删除审核日志"),
                 ("/logs/export", self._web_export_logs, ["GET"], "导出审核日志"),
                 ("/log_detail", self._web_log_detail, ["GET"], "获取单条日志详情"),
+                ("/log_chunk", self._web_log_chunk, ["GET"], "获取日志文本分片"),
                 ("/log_raw_text", self._web_log_raw_text, ["GET"], "获取日志原始文本"),
                 ("/groups", self._web_get_groups, ["GET"], "获取群列表"),
                 ("/group_members", self._web_get_group_members, ["GET"], "获取群成员列表"),
@@ -351,22 +352,43 @@ class Main(Star):
             for log in self._moderation_logs:
                 if log.get("id") == target_id:
                     msg = log.get("msg_text", "")
-                    total = len(msg)
                     chunk_size = 400
-                    chunks = []
-                    for i in range(0, total, chunk_size):
-                        chunks.append(msg[i:i + chunk_size])
+                    chunk_count = (len(msg) + chunk_size - 1) // chunk_size if msg else 0
                     return jsonify({
                         "status": "success",
                         "data": {
-                            "total_len": total,
-                            "chunk_count": len(chunks),
+                            "total_len": len(msg),
+                            "chunk_count": chunk_count,
                             "image_urls": log.get("image_urls", []),
                             "reason": log.get("reason", ""),
                             "action": log.get("action", ""),
-                            "chunks": chunks,
                         }
                     })
+            return jsonify({"status": "error", "message": "未找到该日志"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
+
+    async def _web_log_chunk(self):
+        try:
+            log_id = quart_request.args.get("id", "").strip()
+            chunk_idx = quart_request.args.get("chunk", "0").strip()
+            if not log_id:
+                return jsonify({"status": "error", "message": "缺少日志ID"})
+            try:
+                target_id = int(log_id)
+            except (ValueError, TypeError):
+                return jsonify({"status": "error", "message": "无效的日志ID"})
+            try:
+                idx = int(chunk_idx)
+            except (ValueError, TypeError):
+                idx = 0
+            for log in self._moderation_logs:
+                if log.get("id") == target_id:
+                    msg = log.get("msg_text", "")
+                    chunk_size = 400
+                    start = idx * chunk_size
+                    piece = msg[start:start + chunk_size]
+                    return jsonify({"status": "success", "data": {"i": idx, "t": piece}})
             return jsonify({"status": "error", "message": "未找到该日志"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
