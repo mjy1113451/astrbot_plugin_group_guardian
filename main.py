@@ -2400,11 +2400,12 @@ class Main(Star):
                 logger.info(f"[GroupMgr] OCR开始识别 {len(ocr_urls)} 张图片")
                 ocr_text = await self._ocr_images(event, ocr_urls)
                 if ocr_text:
+                    logger.info(f"[GroupMgr] OCR原始结果 len={len(ocr_text)}")
                     if text:
                         text = text + '\n[OCR识图内容]\n' + ocr_text
                     else:
                         text = '[OCR识图内容]\n' + ocr_text
-                    logger.info(f"[GroupMgr] OCR识别结果: {ocr_text[:100]}")
+                    logger.info(f"[GroupMgr] OCR拼接后 text len={len(text)}")
                 else:
                     logger.debug(f"[GroupMgr] OCR识别返回空结果")
 
@@ -2475,6 +2476,7 @@ class Main(Star):
 
         if not is_violation:
             logger.info(f"[GroupMgr] LLM审核通过: {user_name}({user_id}) in {group_id} | 命中类型={{{', '.join(k for k, v in hit_types.items() if v)}}} | 原因={reason}")
+            logger.info(f"[GroupMgr] LLM放行时 text len={len(text)} last50={text[-50:]}")
             self._log_moderation(group_id, user_id, user_name, text, "LLM放行", reason, image_urls)
             return
 
