@@ -1010,7 +1010,7 @@ class Main(Star):
     def _invalidate_stats_cache(self):
         self._stats_cache["today_start"] = 0
 
-    def _log_moderation(self, group_id: str, user_id: str, user_name: str, msg_text: str, action: str, reason: str = ""):
+    def _log_moderation(self, group_id: str, user_id: str, user_name: str, msg_text: str, action: str, reason: str = "", image_urls: list = None):
         log_entry = {
             "id": len(self._moderation_logs),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1022,6 +1022,7 @@ class Main(Star):
             "msg_preview": msg_text[:100],
             "action": action,
             "reason": reason,
+            "image_urls": image_urls or [],
         }
         self._moderation_logs.append(log_entry)
         today_start = self._today_start()
@@ -2584,7 +2585,7 @@ class Main(Star):
                         user_name = event.get_sender_name()
                         user_id = self._try_get_sender_id(event)
                         yield event.plain_result(f"[群管] 检测到QQ收藏内容，已自动撤回")
-                        self._log_moderation(group_id, user_id, user_name, "[QQ收藏消息]", "撤回", "QQ收藏内容自动撤回")
+                        self._log_moderation(group_id, user_id, user_name, "[QQ收藏消息]", "撤回", "QQ收藏内容自动撤回", image_urls)
                         event.stop_event()
                 except Exception as e:
                     logger.warning(f"[GroupMgr] QQ收藏撤回失败: {e}")
@@ -2663,7 +2664,7 @@ class Main(Star):
                 await self._mute_member(event)
                 notice = self.config.get("ban_notice", "[群管] {name}({uid}) 已被禁言（触发规则）")
                 yield event.plain_result(notice.replace("{name}", user_name).replace("{uid}", user_id).replace("{group}", group_id))
-                self._log_moderation(group_id, user_id, user_name, text, "撤回+禁言", reason)
+                self._log_moderation(group_id, user_id, user_name, text, "撤回+禁言", reason, image_urls)
                 event.stop_event()
             except Exception as e:
                 logger.warning(f"[GroupMgr] 自动审核出错: {e}")
@@ -2675,7 +2676,7 @@ class Main(Star):
 
         if not is_violation:
             logger.info(f"[GroupMgr] LLM审核通过: {user_name}({user_id}) in {group_id} | 命中类型={{{', '.join(k for k, v in hit_types.items() if v)}}} | 原因={reason}")
-            self._log_moderation(group_id, user_id, user_name, text, "LLM放行", reason)
+            self._log_moderation(group_id, user_id, user_name, text, "LLM放行", reason, image_urls)
             return
 
         logger.info(f"[GroupMgr] LLM审核拦截: {user_name}({user_id}) in {group_id} | 命中类型={{{', '.join(k for k, v in hit_types.items() if v)}}} | 原因={reason}")
@@ -2701,7 +2702,7 @@ class Main(Star):
                 except Exception as notice_err:
                     logger.warning(f"[GroupMgr] 发送通知失败: {notice_err}")
 
-            self._log_moderation(group_id, user_id, user_name, text, "LLM撤回", reason)
+            self._log_moderation(group_id, user_id, user_name, text, "LLM撤回", reason, image_urls)
             event.stop_event()
         except Exception as e:
             logger.warning(f"[GroupMgr] 自动审核出错: {e}")
