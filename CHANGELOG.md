@@ -24,9 +24,11 @@
 - **版本号统一管理**：新增 `_PLUGIN_VERSION` 常量，`@register` 装饰器和 `_web_stats` API 均引用该常量，避免版本号硬编码多处不一致
 - **移除未使用的 `import struct`**：该导入从未被使用
 - **移除未使用的 `_log_lock`**：`asyncio.Lock()` 创建后从未使用，已清理
+- **移除未使用的 `_check_qq_favorite` 方法**：该方法从未被调用，与 `_check_qq_favorite_non_forward` 逻辑重复
 - **`import csv, io` 移至文件顶部**：符合 PEP 8 规范，避免方法内延迟导入
 - **`list.remove()` 安全化**：新增 `_safe_list_remove` 辅助方法，所有 `list.remove()` 调用替换为安全版本，避免 `ValueError` 异常
 - **`_web_delete_logs` ID 转换安全化**：`int()` 转换添加异常捕获，非法 ID 不再导致整个删除操作失败
+- **命令方法大规模重构**：提取 `_check_admin_cfg_access`、`_get_group_client`、`_call_group_api` 三个辅助方法，消除 20+ 个命令方法中重复的权限检查+获取客户端+调用API模式，减少约 300 行重复代码
 
 ### 文件清理
 
