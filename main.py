@@ -774,7 +774,14 @@ class Main(Star):
                     content = await resp.read()
                     content_type = resp.headers.get("Content-Type", "image/jpeg")
                     from quart import Response
-                    return Response(content, status=200, content_type=content_type)
+                    return Response(
+                        content, status=200, content_type=content_type,
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Cross-Origin-Resource-Policy": "cross-origin",
+                            "Cache-Control": "public, max-age=3600",
+                        }
+                    )
         except asyncio.TimeoutError:
             return jsonify({"status": "error", "message": "图片获取超时"}), 504
         except Exception as e:
