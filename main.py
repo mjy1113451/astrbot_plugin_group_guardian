@@ -777,7 +777,7 @@ class Main(Star):
     def _extract_list_result(result) -> list:
         if isinstance(result, list):
             return result
-        if isinstance(result, dict):
+            if isinstance(result, dict):
             return result.get("data") or result.get("notices") or []
         return []
 
@@ -2003,7 +2003,12 @@ class Main(Star):
     def _is_ad_pattern(self, text: str) -> bool:
         if not text:
             return False
-        return any(p.search(text) for p in self._compiled_ad)
+        for p in self._compiled_ad:
+            m = p.search(text)
+            if m:
+                logger.info(f"[GroupMgr] 正则广告命中: {m.group()}")
+                return True
+        return False
 
     def _should_scan_message(self, event: AiocqhttpMessageEvent) -> bool:
         sub_type = ''
