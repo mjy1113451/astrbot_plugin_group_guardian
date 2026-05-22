@@ -777,7 +777,7 @@ class Main(Star):
     def _extract_list_result(result) -> list:
         if isinstance(result, list):
             return result
-            if isinstance(result, dict):
+        if isinstance(result, dict):
             return result.get("data") or result.get("notices") or []
         return []
 
