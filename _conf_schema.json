@@ -336,5 +336,17 @@
         "type": "bool",
         "default": true,
         "hint": "开启后会通过OCR识别商城表情图片内容进行审核（需同时开启OCR）"
+    },
+    "word_count_enabled": {
+        "description": "字数统计功能开关",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后允许使用 /字数统计 查询最近群消息中的关键词出现次数"
+    },
+    "group_stats_enabled": {
+        "description": "群统计功能开关",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后允许使用 /群统计 查看群成员数量与管理员统计"
     }
 }

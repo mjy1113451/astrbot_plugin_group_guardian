@@ -57,7 +57,9 @@ class Main(Star):
         self._lexicon = self._load_lexicon()
         self._compiled_lexicon = self._compile_lexicon()
         self._moderation_logs = deque(self._load_logs(), maxlen=500)
+        self._next_log_id = self._init_next_log_id()
         self._last_log_save = 0.0
+        self._log_save_task = None
         self._admin_role_cache: Dict[str, Tuple[bool, float]] = {}
         self._admin_role_cache_ttl = 300.0
         self._stats_cache = {"today_start": 0, "blocked": 0, "passed": 0, "total": 0, "group_stats": {}, "user_stats": {}}
@@ -126,18 +128,36 @@ class Main(Star):
             logger.exception("load_logs failed")
         return []
 
+    def _init_next_log_id(self) -> int:
+        max_id = -1
+        for item in self._moderation_logs:
+            try:
+                max_id = max(max_id, int(item.get("id", -1)))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        return max_id + 1
+
     def _save_logs(self) -> None:
         try:
             p = self._logs_path()
             data = list(self._moderation_logs)
             try:
                 loop = asyncio.get_running_loop()
-                loop.run_in_executor(None, self._write_logs_sync, p, data)
+                task = loop.run_in_executor(None, self._write_logs_sync, p, data)
+                self._log_save_task = task
+                task.add_done_callback(self._on_log_save_done)
                 self._last_log_save = time.time()
             except RuntimeError:
                 logger.warning("[GroupMgr] 无事件循环，跳过日志写入（将在下次可用时保存）")
         except Exception:
             logger.exception("save_logs failed")
+
+    @staticmethod
+    def _on_log_save_done(task) -> None:
+        try:
+            task.result()
+        except Exception:
+            logger.exception("save_logs async failed")
 
     @staticmethod
     def _write_logs_sync(path: str, data: list) -> None:
@@ -477,10 +497,7 @@ class Main(Star):
                 except (ValueError, TypeError):
                     continue
             before = len(self._moderation_logs)
-            new_logs = deque((l for l in self._moderation_logs if l.get("id") not in id_set), maxlen=500)
-            for i, log in enumerate(new_logs):
-                log["id"] = i
-            self._moderation_logs = new_logs
+            self._moderation_logs = deque((l for l in self._moderation_logs if l.get("id") not in id_set), maxlen=500)
             self._invalidate_stats_cache()
             self._save_logs()
             return jsonify({"status": "success", "deleted": before - len(self._moderation_logs)})
@@ -761,7 +778,8 @@ class Main(Star):
                          "multimedia.nt.qq.com.cn", "c2cpicdw.qpic.cn")
         from urllib.parse import urlparse
         parsed = urlparse(url)
-        host_ok = any(parsed.hostname and parsed.hostname.endswith(h) for h in allowed_hosts)
+        hostname = (parsed.hostname or "").lower()
+        host_ok = parsed.scheme in ("http", "https") and any(hostname == h or hostname.endswith("." + h) for h in allowed_hosts)
         if not host_ok:
             return jsonify({"status": "error", "message": "不允许代理该域名"}), 403
         try:
@@ -795,6 +813,8 @@ class Main(Star):
             return False
 
     def _cfg(self, key: str, default: bool = True) -> bool:
+        if key in self._config_schema:
+            default = self._config_schema[key].get("default", default)
         return bool(self.config.get(key, default))
 
     def _today_start(self) -> int:
@@ -815,11 +835,18 @@ class Main(Star):
         return [str(a).strip() for a in admin_list if a]
 
     @staticmethod
+    def _extract_data_result(result):
+        if isinstance(result, dict) and "data" in result:
+            return result.get("data")
+        return result
+
+    @staticmethod
     def _extract_list_result(result) -> list:
+        result = Main._extract_data_result(result)
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
-            return result.get("data") or result.get("notices") or []
+            return result.get("messages") or result.get("files") or result.get("notices") or []
         return []
 
     @staticmethod
@@ -1066,6 +1093,7 @@ class Main(Star):
                 client = await self._get_client(event)
                 if client:
                     info = await client.call_action('get_group_member_info', group_id=group_id_int, user_id=user_id_int, no_cache=False)
+                    info = self._extract_data_result(info)
                     if info:
                         role = info.get('role', '')
                         is_admin_val = role in ('admin', 'owner')
@@ -1166,8 +1194,10 @@ class Main(Star):
 
     def _log_moderation(self, group_id: str, user_id: str, user_name: str, msg_text: str, action: str, reason: str = "", image_urls: list = None):
         valid_urls = [u for u in (image_urls or []) if u][:5]
+        log_id = self._next_log_id
+        self._next_log_id += 1
         log_entry = {
-            "id": len(self._moderation_logs),
+            "id": log_id,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ts": int(time.time()),
             "group_id": group_id,
@@ -1670,6 +1700,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_root_files', group_id=gid)
+            result = self._extract_data_result(result)
             files = (result.get('files') or []) if isinstance(result, dict) else []
             folders = (result.get('folders') or []) if isinstance(result, dict) else []
             if not files and not folders:
@@ -1782,6 +1813,7 @@ class Main(Star):
         try:
             result = await client.call_action('get_group_msg_history',
                 group_id=gid, message_seq=0, count=min(count + 5, 100))
+            result = self._extract_data_result(result)
             messages = result.get('messages', []) if isinstance(result, dict) else []
             return [m for m in messages if str(m.get('message_id', '')) != str(current_msg_id)][-count:]
         except Exception as e:
@@ -2107,6 +2139,7 @@ class Main(Star):
         for fid in forward_ids:
             try:
                 result = await client.call_action('get_forward_msg', message_id=fid)
+                result = self._extract_data_result(result)
                 if not isinstance(result, dict):
                     continue
                 messages = result.get('messages', []) or result.get('message', [])
@@ -2648,6 +2681,7 @@ class Main(Star):
             return 0, []
         try:
             result = await client.call_action('get_group_msg_history', group_id=self._safe_int(group_id, 0), count=100)
+            result = self._extract_data_result(result)
             messages = result.get('messages', []) if isinstance(result, dict) else []
         except Exception as e:
             logger.warning(f"[GroupMgr] 获取历史消息失败: {e}")
@@ -2715,11 +2749,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"获取统计失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("搜索成员")
     async def search_member(self, event: AstrMessageEvent):
         '''按昵称或QQ号搜索群成员'''
-        ok, err = await self._check_admin_cfg_access(event, "member_list_enabled", "查看群成员", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "member_list_enabled", "查看群成员")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2757,7 +2790,6 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"搜索失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("撤回最新消息")
     async def recall_last(self, event: AstrMessageEvent):
         '''撤回群内最新一条或多条消息'''
@@ -2787,6 +2819,7 @@ class Main(Star):
             return
         try:
             result = await client.call_action('get_group_msg_history', group_id=self._safe_int(group_id, 0), count=count + 1)
+            result = self._extract_data_result(result)
             messages = result.get('messages', []) if isinstance(result, dict) else []
             recalled = 0
             for msg in messages[-count:]:
@@ -2801,11 +2834,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"撤回失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("禁言")
     async def cmd_ban(self, event: AstrMessageEvent):
         '''禁言指定群成员。用法: /禁言 <QQ号> <分钟>'''
-        ok, err = await self._check_admin_cfg_access(event, "ban_enabled", "禁言", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "ban_enabled", "禁言")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2832,11 +2864,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"禁言失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("解禁")
     async def cmd_unban(self, event: AstrMessageEvent):
         '''解除指定群成员禁言。用法: /解禁 <QQ号>'''
-        ok, err = await self._check_admin_cfg_access(event, "unban_enabled", "解禁", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "unban_enabled", "解禁")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2862,11 +2893,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"解禁失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("踢人")
     async def cmd_kick(self, event: AstrMessageEvent):
         '''将成员移出群聊。用法: /踢人 <QQ号>'''
-        ok, err = await self._check_admin_cfg_access(event, "kick_enabled", "踢人", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "kick_enabled", "踢人")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2892,11 +2922,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"踢人失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("全体禁言")
     async def cmd_whole_ban(self, event: AstrMessageEvent):
         '''开启或关闭全员禁言。用法: /全体禁言 开启/关闭'''
-        ok, err = await self._check_admin_cfg_access(event, "whole_ban_enabled", "全体禁言", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "whole_ban_enabled", "全体禁言")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2919,11 +2948,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"操作失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("设置名片")
     async def cmd_set_card(self, event: AstrMessageEvent):
         '''修改成员群名片。用法: /设置名片 <QQ号> <新名称>'''
-        ok, err = await self._check_admin_cfg_access(event, "set_card_enabled", "设置名片", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "set_card_enabled", "设置名片")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2950,11 +2978,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"设置失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("发公告")
     async def cmd_send_notice(self, event: AstrMessageEvent):
         '''发布群公告。用法: /发公告 <内容>'''
-        ok, err = await self._check_admin_cfg_access(event, "send_announcement_enabled", "发公告", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "send_announcement_enabled", "发公告")
         if not ok:
             yield event.plain_result(err)
             return
@@ -2977,11 +3004,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"发送失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("删公告")
     async def cmd_delete_notice(self, event: AstrMessageEvent):
         '''删除群公告。用法: /删公告 <公告ID>'''
-        ok, err = await self._check_admin_cfg_access(event, "delete_announcement_enabled", "删公告", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "delete_announcement_enabled", "删公告")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3044,6 +3070,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_root_files', group_id=gid)
+            result = self._extract_data_result(result)
             files = result.get("files", []) if isinstance(result, dict) else []
             folders = result.get("folders", []) if isinstance(result, dict) else []
             lines = [f"📁 群文件列表:"]
@@ -3063,11 +3090,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"获取失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("删文件")
     async def cmd_delete_file(self, event: AstrMessageEvent):
         '''删除群文件。用法: /删文件 <文件ID>'''
-        ok, err = await self._check_admin_cfg_access(event, "group_files_enabled", "群文件管理", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "group_files_enabled", "群文件管理")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3102,7 +3128,7 @@ class Main(Star):
                 yield event.plain_result(err)
                 return
             result = await client.call_action('get_group_member_list', group_id=gid)
-            members = result if isinstance(result, list) else []
+            members = self._extract_list_result(result)
             role_count = {"owner": 0, "admin": 0, "member": 0}
             for m in members:
                 role = m.get("role", "member")
@@ -3144,11 +3170,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"获取失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("群名")
     async def cmd_set_name(self, event: AstrMessageEvent):
         '''修改群聊名称。用法: /群名 <新名称>'''
-        ok, err = await self._check_admin_cfg_access(event, "set_group_name_enabled", "修改群名", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "set_group_name_enabled", "修改群名")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3169,11 +3194,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"修改失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("头衔")
     async def cmd_set_title(self, event: AstrMessageEvent):
         '''设置成员专属头衔。用法: /头衔 <QQ号> <头衔名>'''
-        ok, err = await self._check_admin_cfg_access(event, "set_title_enabled", "设置头衔", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "set_title_enabled", "设置头衔")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3200,11 +3224,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"设置失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("设精华")
     async def cmd_set_essence(self, event: AstrMessageEvent):
         '''设置精华消息。用法: /设精华 <消息ID>'''
-        ok, err = await self._check_admin_cfg_access(event, "essence_enabled", "精华消息", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "essence_enabled", "精华消息")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3229,11 +3252,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"设置失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("取消精华")
     async def cmd_del_essence(self, event: AstrMessageEvent):
         '''取消精华消息。用法: /取消精华 <消息ID>'''
-        ok, err = await self._check_admin_cfg_access(event, "essence_enabled", "精华消息", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "essence_enabled", "精华消息")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3258,11 +3280,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"取消失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("设置管理")
     async def cmd_set_admin(self, event: AstrMessageEvent):
         '''设置或取消群管理员。用法: /设置管理 <QQ号>'''
-        ok, err = await self._check_admin_cfg_access(event, "set_admin_enabled", "设置管理员", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "set_admin_enabled", "设置管理员")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3288,11 +3309,10 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"设置失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("加群方式")
     async def cmd_join_verify(self, event: AstrMessageEvent):
         '''修改入群验证方式。用法: /加群方式 <需要验证/允许/禁止>'''
-        ok, err = await self._check_admin_cfg_access(event, "join_verify_enabled", "加群验证", need_admin=False)
+        ok, err = await self._check_admin_cfg_access(event, "join_verify_enabled", "加群验证")
         if not ok:
             yield event.plain_result(err)
             return
@@ -3319,10 +3339,12 @@ class Main(Star):
         except Exception as e:
             yield event.plain_result(f"设置失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("自动审核")
     async def cmd_auto_moderate(self, event: AstrMessageEvent):
         '''开关智能审核功能。用法: /自动审核 开启/关闭/状态'''
+        if not await self._is_admin(event):
+            yield event.plain_result("仅管理员可以使用此功能")
+            return
         args = event.message_str.split()
         if len(args) < 2:
             status = "开启" if self.auto_moderate_enabled else "关闭"
@@ -3341,10 +3363,12 @@ class Main(Star):
         self._save_config_safe()
         yield event.plain_result(f"自动审核已{action}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("设置管理插件")
     async def cmd_plugin_admin(self, event: AstrMessageEvent):
         '''管理插件管理员列表。用法: /设置管理插件 <QQ号> 添加/移除'''
+        if not await self._is_admin(event):
+            yield event.plain_result("仅管理员可以使用此功能")
+            return
         args = event.message_str.split()
         if len(args) < 2:
             admins = self.config.get("admin_list", [])
@@ -3368,7 +3392,6 @@ class Main(Star):
         self.config["admin_list"] = admin_list
         self._save_config_safe()
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("批量撤回")
     async def recall_all(self, event: AstrMessageEvent):
         '''批量撤回最近消息。用法: /批量撤回 [条数] 或 /批量撤回 @用户 [条数]'''
@@ -3379,6 +3402,9 @@ class Main(Star):
         allowed, reason = self._check_group_access(event)
         if not allowed:
             yield event.plain_result(reason)
+            return
+        if not await self._is_admin(event):
+            yield event.plain_result("仅管理员可以使用此功能")
             return
         args = event.message_str.split()
         target_user = None
@@ -3400,6 +3426,7 @@ class Main(Star):
             return
         try:
             result = await client.call_action('get_group_msg_history', group_id=self._safe_int(group_id, 0), count=100)
+            result = self._extract_data_result(result)
             messages = result.get('messages', []) if isinstance(result, dict) else []
             recalled = 0
             for msg in messages:
