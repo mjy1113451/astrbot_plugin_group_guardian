@@ -13,6 +13,7 @@ from .llm_tools import LlmToolsMixin
 from .moderation import ModerationMixin
 from .onebot import OneBotMixin
 from .patterns import AD_PATTERNS, SWEAR_PATTERNS
+from .storage import SQLiteStorage
 from .utils import UtilitiesMixin
 from .web import WebMixin
 
@@ -26,6 +27,8 @@ class Main(CommandsMixin, ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin,
         self._sync_astrbot_admins()
         self._client = None
         self._data_dir = StarTools.get_data_dir()
+        self._storage = SQLiteStorage(self._data_dir, self._get_plugin_dir())
+        self._storage.initialize()
         _gwl = self.config.get("group_white_list", [])
         self.group_white_list = [str(g).strip() for g in (_gwl if isinstance(_gwl, list) else [_gwl]) if g]
         self._group_white_set = set(self.group_white_list)
@@ -41,7 +44,7 @@ class Main(CommandsMixin, ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin,
         self._lexicon = self._load_lexicon()
         self._compiled_lexicon = self._compile_lexicon()
         self._moderation_logs = deque(self._load_logs(), maxlen=500)
-        self._next_log_id = self._init_next_log_id()
+        self._next_log_id = max(self._init_next_log_id(), self._storage.max_log_id() + 1)
         self._last_log_save = 0.0
         self._log_save_task = None
         self._admin_role_cache: Dict[str, Tuple[bool, float]] = {}
@@ -51,13 +54,7 @@ class Main(CommandsMixin, ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin,
         self._register_web_apis()
 
     async def terminate(self):
-        try:
-            data = list(self._moderation_logs)
-            p = self._logs_path()
-            await asyncio.to_thread(self._write_logs_sync, p, data)
-            logger.info("[GroupMgr] 插件卸载，日志已保存")
-        except Exception as e:
-            logger.warning(f"[GroupMgr] 插件卸载保存日志失败: {e}")
+        logger.info("[GroupMgr] 插件卸载，SQLite 存储已自动持久化")
 
 
 _DECORATED_METHOD_MIXINS = (CommandsMixin, ModerationMixin, LlmToolsMixin)

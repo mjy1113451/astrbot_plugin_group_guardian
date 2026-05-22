@@ -3,7 +3,6 @@ import asyncio
 import json
 import os
 import re
-import tempfile
 import time
 from datetime import datetime
 from typing import Dict, List, Tuple
@@ -64,19 +63,11 @@ class UtilitiesMixin:
             data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
 
-    def _logs_path(self) -> str:
-        return str(self._get_data_dir() / "moderation_logs.json")
-
     def _load_logs(self) -> list:
         try:
-            p = self._logs_path()
-            if os.path.exists(p):
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, list):
-                    return data[-500:]
+            return self._storage.list_logs_asc(limit=500)
         except Exception:
-            logger.exception("load_logs failed")
+            logger.exception("load_logs from sqlite failed")
         return []
 
     def _init_next_log_id(self) -> int:
@@ -87,42 +78,6 @@ class UtilitiesMixin:
             except (ValueError, TypeError, AttributeError):
                 continue
         return max_id + 1
-
-    def _save_logs(self) -> None:
-        try:
-            p = self._logs_path()
-            data = list(self._moderation_logs)
-            try:
-                loop = asyncio.get_running_loop()
-                task = loop.run_in_executor(None, self._write_logs_sync, p, data)
-                self._log_save_task = task
-                task.add_done_callback(self._on_log_save_done)
-                self._last_log_save = time.time()
-            except RuntimeError:
-                logger.warning("[GroupMgr] 无事件循环，跳过日志写入（将在下次可用时保存）")
-        except Exception:
-            logger.exception("save_logs failed")
-
-    @staticmethod
-    def _on_log_save_done(task) -> None:
-        try:
-            task.result()
-        except Exception:
-            logger.exception("save_logs async failed")
-
-    @staticmethod
-    def _write_logs_sync(path: str, data: list) -> None:
-        dir_name = os.path.dirname(path)
-        tmp_path = None
-        try:
-            fd, tmp_path = tempfile.mkstemp(suffix='.json', dir=dir_name)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
-            os.replace(tmp_path, path)
-        except Exception:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            raise
 
     def _safe_list_remove(self, lst: list, value) -> bool:
         try:
@@ -210,25 +165,15 @@ class UtilitiesMixin:
         return os.path.dirname(os.path.abspath(__file__))
 
     def _load_lexicon(self) -> Dict[str, Dict]:
-        lexicon_path = os.path.join(self._get_plugin_dir(), "lexicon.json")
-        data_dir = self._get_data_dir()
-        data_lexicon_path = str(data_dir / "lexicon.json")
-        if os.path.exists(data_lexicon_path):
-            lexicon_path = data_lexicon_path
-        if not os.path.exists(lexicon_path):
-            logger.warning("[GroupMgr] 外置词库文件不存在，跳过加载")
-            return {}
         try:
-            with open(lexicon_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            categories = data.get("categories", {})
-            logger.info(f"[GroupMgr] 已加载外置词库: {len(categories)} 个分类")
+            categories = self._storage.load_lexicon()
+            logger.info(f"[GroupMgr] 已从 SQLite 加载外置词库: {len(categories)} 个分类")
             for cat_name, cat_data in categories.items():
                 keywords = cat_data.get("keywords", [])
                 logger.info(f"[GroupMgr]   - {cat_name}: {len(keywords)} 条关键词")
             return categories
         except Exception as e:
-            logger.error(f"[GroupMgr] 加载外置词库失败: {e}")
+            logger.error(f"[GroupMgr] 加载 SQLite 外置词库失败: {e}")
             return {}
 
     def _compile_lexicon(self) -> Dict[str, List[re.Pattern]]:
@@ -359,6 +304,10 @@ class UtilitiesMixin:
             "image_urls": valid_urls,
         }
         self._moderation_logs.append(log_entry)
+        try:
+            self._storage.add_log(log_entry)
+        except Exception:
+            logger.exception("save moderation log to sqlite failed")
         today_start = self._today_start()
         sc = self._stats_cache
         if sc["today_start"] == today_start:
@@ -388,7 +337,4 @@ class UtilitiesMixin:
                             del us[k]
             elif "放行" in action:
                 sc["passed"] += 1
-        now = time.time()
-        if now - self._last_log_save >= 15.0:
-            self._save_logs()
-            self._last_log_save = now
+        self._last_log_save = time.time()

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import csv
 import io
 import json
 import time
+from collections import deque
 from datetime import datetime
 
 try:
@@ -61,6 +63,8 @@ class WebMixin:
                 ("/admin/add", self._web_admin_add, ["POST"], "添加管理员"),
                 ("/admin/remove", self._web_admin_remove, ["POST"], "移除管理员"),
                 ("/today_stats", self._web_today_stats, ["GET"], "获取今日拦截统计"),
+                ("/migration/status", self._web_migration_status, ["GET"], "获取SQLite迁移状态"),
+                ("/migration/run", self._web_migration_run, ["POST"], "执行SQLite迁移"),
                 ("/image_proxy", self._web_image_proxy, ["GET"], "图片代理"),
             ]
             for path, handler, methods, desc in routes:
@@ -109,7 +113,7 @@ class WebMixin:
             "lexicon_total_keywords": sum(
                 len(cat.get("keywords", [])) for cat in self._lexicon.values()
             ),
-            "total_logs": len(self._moderation_logs),
+            "total_logs": self._storage.count_logs(),
             "today_total": today_total,
             "today_blocked": today_blocked,
             "today_passed": today_passed,
@@ -213,8 +217,17 @@ class WebMixin:
             limit = min(int(quart_request.args.get("limit", 50)), 200)
         except (ValueError, TypeError):
             limit = 50
-        logs = list(self._moderation_logs)[-limit:]
+        logs = self._storage.list_logs(limit=limit)
         return jsonify({"status": "success", "data": logs})
+
+    def _get_log_by_id(self, target_id: int):
+        log = self._storage.get_log(target_id)
+        if log:
+            return log
+        for item in self._moderation_logs:
+            if item.get("id") == target_id:
+                return item
+        return None
 
     async def _web_log_detail(self):
         try:
@@ -225,22 +238,22 @@ class WebMixin:
                 target_id = int(log_id)
             except (ValueError, TypeError):
                 return jsonify({"status": "error", "message": "无效的日志ID"})
-            for log in self._moderation_logs:
-                if log.get("id") == target_id:
-                    msg = log.get("msg_text", "")
-                    chunk_size = 400
-                    chunk_count = (len(msg) + chunk_size - 1) // chunk_size if msg else 0
-                    logger.debug(f"[GroupMgr] log_detail id={target_id} msg_len={len(msg)} chunk_count={chunk_count}")
-                    return jsonify({
-                        "status": "success",
-                        "data": {
-                            "total_len": len(msg),
-                            "chunk_count": chunk_count,
-                            "image_urls": log.get("image_urls", []),
-                            "reason": log.get("reason", ""),
-                            "action": log.get("action", ""),
-                        }
-                    })
+            log = self._get_log_by_id(target_id)
+            if log:
+                msg = log.get("msg_text", "")
+                chunk_size = 400
+                chunk_count = (len(msg) + chunk_size - 1) // chunk_size if msg else 0
+                logger.debug(f"[GroupMgr] log_detail id={target_id} msg_len={len(msg)} chunk_count={chunk_count}")
+                return jsonify({
+                    "status": "success",
+                    "data": {
+                        "total_len": len(msg),
+                        "chunk_count": chunk_count,
+                        "image_urls": log.get("image_urls", []),
+                        "reason": log.get("reason", ""),
+                        "action": log.get("action", ""),
+                    }
+                })
             return jsonify({"status": "error", "message": "未找到该日志"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
@@ -259,13 +272,13 @@ class WebMixin:
                 idx = int(chunk_idx)
             except (ValueError, TypeError):
                 idx = 0
-            for log in self._moderation_logs:
-                if log.get("id") == target_id:
-                    msg = log.get("msg_text", "")
-                    chunk_size = 400
-                    start = idx * chunk_size
-                    piece = msg[start:start + chunk_size]
-                    return jsonify({"status": "success", "data": {"i": idx, "t": piece}})
+            log = self._get_log_by_id(target_id)
+            if log:
+                msg = log.get("msg_text", "")
+                chunk_size = 400
+                start = idx * chunk_size
+                piece = msg[start:start + chunk_size]
+                return jsonify({"status": "success", "data": {"i": idx, "t": piece}})
             return jsonify({"status": "error", "message": "未找到该日志"})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
@@ -280,17 +293,17 @@ class WebMixin:
                 target_id = int(log_id)
             except (ValueError, TypeError):
                 return "无效的日志ID", 400, _cors
-            for log in self._moderation_logs:
-                if log.get("id") == target_id:
-                    raw = log.get("msg_text", "")
-                    logger.debug(f"[GroupMgr] log_raw_text id={target_id} len={len(raw)}")
-                    return raw, 200, _cors
+            log = self._get_log_by_id(target_id)
+            if log:
+                raw = log.get("msg_text", "")
+                logger.debug(f"[GroupMgr] log_raw_text id={target_id} len={len(raw)}")
+                return raw, 200, _cors
             return "未找到该日志", 404, _cors
         except Exception as e:
             return str(e), 500, _cors
 
     async def _web_get_moderation_users(self):
-        logs = list(self._moderation_logs)
+        logs = self._storage.list_logs(limit=5000)
         action_filter = quart_request.args.get("action", "").strip()
         user_map = {}
         for log in logs:
@@ -333,10 +346,9 @@ class WebMixin:
             ids = data.get("ids", [])
             delete_all = data.get("delete_all", False)
             if delete_all:
-                count = len(self._moderation_logs)
+                count = self._storage.delete_all_logs()
                 self._moderation_logs.clear()
                 self._invalidate_stats_cache()
-                self._save_logs()
                 return jsonify({"status": "success", "deleted": count})
             if not ids:
                 return jsonify({"status": "error", "message": "未指定要删除的日志ID"})
@@ -346,17 +358,16 @@ class WebMixin:
                     id_set.add(int(i))
                 except (ValueError, TypeError):
                     continue
-            before = len(self._moderation_logs)
+            deleted = self._storage.delete_logs(id_set)
             self._moderation_logs = deque((l for l in self._moderation_logs if l.get("id") not in id_set), maxlen=500)
             self._invalidate_stats_cache()
-            self._save_logs()
-            return jsonify({"status": "success", "deleted": before - len(self._moderation_logs)})
+            return jsonify({"status": "success", "deleted": deleted})
         except Exception as e:
             return jsonify({"status": "error", "message": str(e)})
 
     async def _web_export_logs(self):
         fmt = quart_request.args.get("format", "json").strip().lower()
-        logs = list(self._moderation_logs)
+        logs = self._storage.list_logs(limit=100000)
         if fmt == "csv":
             output = io.StringIO()
             writer = csv.writer(output)
@@ -617,6 +628,29 @@ class WebMixin:
                 "user_ranking": [{"user_id": u, "user_name": user_names.get(u, ""), "count": c} for u, c in user_ranking],
             }
         })
+
+    async def _web_migration_status(self):
+        try:
+            return jsonify({"status": "success", "data": self._storage.migration_status()})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
+
+    async def _web_migration_run(self):
+        try:
+            data = await quart_request.get_json(force=True, silent=True) or {}
+            confirm = str(data.get("confirm", "")).strip()
+            if confirm != "我确认迁移并删除旧日志文件":
+                return jsonify({"status": "error", "message": "确认文本不匹配，迁移未执行"})
+            result = self._storage.migrate_legacy(delete_logs=True)
+            self._lexicon = self._storage.load_lexicon()
+            self._compiled_lexicon = self._compile_lexicon()
+            self._moderation_logs = deque(self._storage.list_logs_asc(limit=500), maxlen=500)
+            self._next_log_id = max(self._init_next_log_id(), self._storage.max_log_id() + 1)
+            self._invalidate_stats_cache()
+            return jsonify({"status": "success", "data": result})
+        except Exception as e:
+            logger.exception("migration failed")
+            return jsonify({"status": "error", "message": str(e)})
 
     async def _web_image_proxy(self):
         if aiohttp is None:
