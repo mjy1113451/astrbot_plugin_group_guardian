@@ -576,6 +576,8 @@ function renderMessageDetail(fullText, imgUrls) {
       var wrap = document.createElement('div');
       wrap.className = 'msg-img-wrap';
       var img = document.createElement('img');
+      img.className = 'msg-detail-img';
+      img.dataset.rawSrc = String(u).replace(/&amp;/g, '&');
       img.style.maxWidth = '100%';
       img.style.borderRadius = '6px';
       img.style.cursor = 'pointer';
@@ -594,7 +596,6 @@ function renderMessageDetail(fullText, imgUrls) {
         this.style.display = 'none';
         fallback.style.display = 'block';
       });
-      img.setAttribute('src', u);
       wrap.appendChild(img);
       wrap.appendChild(fallback);
       imgSection.appendChild(wrap);
@@ -606,6 +607,9 @@ function renderMessageDetail(fullText, imgUrls) {
     hint.textContent = '点击图片可在新窗口查看原图';
     imgSection.appendChild(hint);
     body.appendChild(imgSection);
+    $$('.msg-detail-img', body).forEach(function(img) {
+      img.src = img.dataset.rawSrc || '';
+    });
   }
   var text = document.createElement('div');
   text.style.whiteSpace = 'pre-wrap';
