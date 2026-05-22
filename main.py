@@ -11,6 +11,11 @@ from collections import deque
 from datetime import datetime
 from typing import Tuple, Dict, List
 
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, StarTools, register
@@ -186,6 +191,7 @@ class Main(Star):
                 ("/admin/add", self._web_admin_add, ["POST"], "添加管理员"),
                 ("/admin/remove", self._web_admin_remove, ["POST"], "移除管理员"),
                 ("/today_stats", self._web_today_stats, ["GET"], "获取今日拦截统计"),
+                ("/image_proxy", self._web_image_proxy, ["GET"], "图片代理"),
             ]
             for path, handler, methods, desc in routes:
                 self.context.register_web_api(
@@ -744,6 +750,35 @@ class Main(Star):
                 "user_ranking": [{"user_id": u, "user_name": user_names.get(u, ""), "count": c} for u, c in user_ranking],
             }
         })
+
+    async def _web_image_proxy(self):
+        if aiohttp is None:
+            return jsonify({"status": "error", "message": "aiohttp 未安装"}), 500
+        url = quart_request.args.get("url", "").strip()
+        if not url:
+            return jsonify({"status": "error", "message": "缺少 url 参数"}), 400
+        allowed_hosts = ("qpic.cn", "gchat.qpic.cn", "p.qlogo.cn", "q.qlogo.cn",
+                         "multimedia.nt.qq.com.cn", "c2cpicdw.qpic.cn")
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host_ok = any(parsed.hostname and parsed.hostname.endswith(h) for h in allowed_hosts)
+        if not host_ok:
+            return jsonify({"status": "error", "message": "不允许代理该域名"}), 403
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        return jsonify({"status": "error", "message": f"图片获取失败: HTTP {resp.status}"}), 502
+                    content = await resp.read()
+                    content_type = resp.headers.get("Content-Type", "image/jpeg")
+                    from quart import Response
+                    return Response(content, status=200, content_type=content_type)
+        except asyncio.TimeoutError:
+            return jsonify({"status": "error", "message": "图片获取超时"}), 504
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
 
     def _safe_list_remove(self, lst: list, value) -> bool:
         try:
