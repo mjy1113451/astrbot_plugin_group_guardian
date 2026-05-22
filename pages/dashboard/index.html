@@ -577,61 +577,35 @@ function escAttr(s) {
   return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function proxyImageUrl(url) {
-  if (!url) return "";
-  var s = String(url);
-  if (s.indexOf("qpic.cn") !== -1 || s.indexOf("qq.com.cn") !== -1) {
-    if (s.indexOf("qlogo.cn") !== -1) return s;
-    return "/astrbot_plugin_group_guardian/image_proxy?url=" + encodeURIComponent(s.replace(/&amp;/g, '&'));
-  }
-  return s;
-}
-
 function renderMessageDetail(fullText, imgUrls) {
   var body = $('#modalBody');
   body.innerHTML = '';
   if (imgUrls && imgUrls.length) {
-    var imgSection = document.createElement('div');
-    imgSection.style.marginBottom = '12px';
+    var linkSection = document.createElement('div');
+    linkSection.style.marginBottom = '12px';
+    var title = document.createElement('div');
+    title.style.fontSize = '12px';
+    title.style.fontWeight = '600';
+    title.style.color = 'var(--text-primary)';
+    title.style.marginBottom = '8px';
+    title.textContent = '图片链接（请手动复制到浏览器访问）';
+    linkSection.appendChild(title);
     imgUrls.forEach(function(u) {
       if (!u) return;
-      var wrap = document.createElement('div');
-      wrap.className = 'msg-img-wrap';
-      var img = document.createElement('img');
-      img.className = 'msg-detail-img';
-      img.dataset.rawSrc = proxyImageUrl(String(u).replace(/&amp;/g, '&'));
-      img.style.maxWidth = '100%';
-      img.style.borderRadius = '6px';
-      img.style.cursor = 'pointer';
-      img.style.display = 'block';
-      img.addEventListener('click', function() { window.open(this.src); });
-      var fallback = document.createElement('div');
-      fallback.style.display = 'none';
-      fallback.style.padding = '8px 12px';
-      fallback.style.background = 'var(--info-light)';
-      fallback.style.borderRadius = '6px';
-      fallback.style.color = 'var(--text-muted)';
-      fallback.style.fontSize = '12px';
-      fallback.style.textAlign = 'center';
-      fallback.textContent = '图片加载失败';
-      img.addEventListener('error', function() {
-        this.style.display = 'none';
-        fallback.style.display = 'block';
-      });
-      wrap.appendChild(img);
-      wrap.appendChild(fallback);
-      imgSection.appendChild(wrap);
+      var url = String(u).replace(/&amp;/g, '&');
+      var item = document.createElement('div');
+      item.style.padding = '8px 10px';
+      item.style.marginBottom = '6px';
+      item.style.background = 'var(--bg-secondary)';
+      item.style.border = '1px solid var(--border)';
+      item.style.borderRadius = '6px';
+      item.style.fontSize = '12px';
+      item.style.color = 'var(--text-secondary)';
+      item.style.wordBreak = 'break-all';
+      item.textContent = url;
+      linkSection.appendChild(item);
     });
-    var hint = document.createElement('div');
-    hint.style.fontSize = '11px';
-    hint.style.color = 'var(--text-muted)';
-    hint.style.marginTop = '4px';
-    hint.textContent = '点击图片可在新窗口查看原图';
-    imgSection.appendChild(hint);
-    body.appendChild(imgSection);
-    $$('.msg-detail-img', body).forEach(function(img) {
-      img.src = img.dataset.rawSrc || '';
-    });
+    body.appendChild(linkSection);
   }
   var text = document.createElement('div');
   text.style.whiteSpace = 'pre-wrap';
