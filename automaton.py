@@ -41,9 +41,12 @@ def _extract_alternatives(pattern: str) -> List[str]:
             options = [o.strip() for o in inner.split("|") if o.strip()]
             if not options:
                 return []
+            valid_options = [o for o in options if not _REGEX_META.search(o)]
+            if not valid_options:
+                return []
             new_candidates = []
             for c in candidates:
-                for opt in options:
+                for opt in valid_options:
                     new_candidates.append(c + opt)
             candidates = new_candidates
             i = end + 1
