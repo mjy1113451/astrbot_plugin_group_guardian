@@ -14,7 +14,6 @@ from .constants import PLUGIN_NAME, PLUGIN_VERSION
 from .llm_tools import LlmToolsMixin
 from .moderation import ModerationMixin
 from .onebot import OneBotMixin
-from .patterns import AD_PATTERNS as _AD_PATTERNS_SEED, SWEAR_PATTERNS as _SWEAR_PATTERNS_SEED
 from .storage import SQLiteStorage
 from .utils import UtilitiesMixin
 from .web import WebMixin

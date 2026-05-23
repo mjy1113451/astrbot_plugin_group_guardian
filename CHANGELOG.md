@@ -6,6 +6,8 @@
 
 - **数据统计仪表盘**：新增 WebUI 数据分析看板，包含每日拦截/放行趋势图、违规类型分布、24小时时段分布、群拦截排行
 - **SQL 分析查询**：`get_daily_trend`、`get_violation_distribution`、`get_group_activity_ranking`、`get_hourly_distribution` 四个统计接口
+- **内置词库 DB 化**：`lexicon.db` 新增 `moderation_rules` 表（13 条脏话正则 + 517 条广告正则），正则规则从硬编码改为 SQLite 存储；`storage.py` 初始化时从内置 DB 同时加载词库和正则规则
+- **正则规则热载就绪**：`moderation_rules` 表支持在线增删改正则规则，后续版本可通过 WebUI 管理
 
 ### 修复
 
