@@ -14,6 +14,15 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
 
 
 class ModerationMixin:
+    # 审核主流程由 _handle_message 驱动（注册在 main.py），按以下顺序执行：
+    # 1. 黑白名单 / 功能开关 / 管理员豁免检查
+    # 2. 消息文本提取（支持普通消息 + 合并转发 + JSON卡片 + QQ收藏）
+    # 3. 正则初筛（脏话、广告、敏感词库）
+    # 4. OCR 识图审核（可选，需配置视觉模型）
+    # 5. LLM 二次判断（30条上下文 + 可疑类型标签）
+    # 6. 违规处理（撤回 + 记录日志），非违规补充段记录便于后续排查
+    # OCR 提示词模板：在 WebUI 的下拉选择里对应三个预设 + 一个自定义选项。
+    # 新增模板只需添加 key，无需改 WebUI 代码。
     _OCR_PROMPT_TEMPLATES = {
         "default": {
             "system": "你是一个图片内容识别助手。请仔细观察图片，用文字详细描述图片中的所有内容。如果图片中有文字，请完整转录所有文字内容。如果图片是广告、推广、违规内容，请特别说明。只输出图片内容描述，不要输出其他内容。",
@@ -163,6 +172,11 @@ class ModerationMixin:
     async def _call_llm_for_moderation(self, event: AiocqhttpMessageEvent,
                                         text: str, hit_types: Dict[str, bool],
                                         group_id: str = "") -> dict:
+        """LLM 二次审核：携带 30 条上下文和可疑类型标签，要求 LLM 返回 JSON。
+
+        Returns:
+            {"violation": bool, "reason": str}
+        """
         if not group_id:
             group_id = self._get_group_id(event)
         msg_obj = getattr(event, 'message_obj', None)

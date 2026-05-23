@@ -17,6 +17,9 @@ from .patterns import _POLITICAL_WHITELIST
 
 
 class UtilitiesMixin:
+    # 跨模块共享的无副作用工具函数。
+    # _format_message_content 负责把 OneBot 消息序列化为审核系统能用的纯文本字符串。
+    # 日志和统计缓存不依赖第三方数据库，直接操作 Python 数据结构。
     _SEG_FORMATTERS = {
         'text':        lambda d: d.get('text', ''),
         'image':       lambda d: d.get('summary', '[图片]') or '[图片]',

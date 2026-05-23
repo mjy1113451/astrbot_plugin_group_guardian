@@ -29,15 +29,24 @@ from .web import WebMixin
 
 @register(PLUGIN_NAME, "zhaisir", "QQ群智能守护者 - AI审核+群管工具集", PLUGIN_VERSION, "https://github.com/zcj-ui/astrbot_plugin_group_guardian")
 class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin, Star):
+    """插件主类，也是 AstrBot 唯一注册入口。
+
+    所有 @filter.command、@filter.llm_tool、@filter.event_message_type
+    等框架注册装饰器只在此类中声明。业务逻辑委托到对应的 mixin 模块。
+    """
+
     def __init__(self, context: Context, config: AstrBotConfig = None):
+        # AstrBot 载入插件时通过 register 装饰器实例化本类，传入 context 和 WebUI 配置。
         super().__init__(context)
         self.config = config or {}
         self._config_schema = self._load_config_schema()
         self._sync_astrbot_admins()
         self._client = None
+        # StarTools.get_data_dir() 返回框架分配的持久化目录，插件数据应放在这里而非插件自身目录。
         self._data_dir = StarTools.get_data_dir()
         self._storage = SQLiteStorage(self._data_dir, self._get_plugin_dir())
         self._storage.initialize()
+        # 群白名单：白名单非空时仅处理列表内的群
         _gwl = self.config.get("group_white_list", [])
         self.group_white_list = [str(g).strip() for g in (_gwl if isinstance(_gwl, list) else [_gwl]) if g]
         self._group_white_set = set(self.group_white_list)
@@ -240,6 +249,8 @@ class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin
             yield item
 
     # LLM Tool 注册区：工具参数签名和 Args 文档会被 AstrBot 解析，请和 llm_tools.py 的业务函数保持一致。
+    # 注意：AstrBot 的 handler 必须使用 yield 发送消息，所以这里用 async for/yield 转发，
+    # 不能直接用 return await。如果业务函数最终 yield None，AstrBot 框架会跳过空回复。
     @filter.llm_tool(name="ban_group_member")
     async def ban_group_member_tool(self, event: AstrMessageEvent, user_id: str, duration_minutes: int = 10):
         '''禁言群成员。当用户要求禁言某人时使用此工具。

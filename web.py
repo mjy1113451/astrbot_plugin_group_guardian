@@ -30,6 +30,10 @@ from .patterns import AD_PATTERNS, SWEAR_PATTERNS
 
 
 class WebMixin:
+    # 本插件 WebUI 面板的所有 API 接口。
+    # 注册通过 main.py 的 _register_web_apis() 调用 _register_routes() 完成。
+    # 每个 API handler 通过 _wrap_web_handler 包装，自动检查 Quart 可用性并做统一异常捕获。
+    # 图片代理接口 _web_image_proxy 只允许白名单域名（qpic.cn 等），且显式禁用了 HTTP 重定向。
     @staticmethod
     def _check_quart_available():
         if quart_request is None or jsonify is None:

@@ -17,6 +17,9 @@ from astrbot.api import logger
 
 
 class SQLiteStorage:
+    # 持久化层统一使用 SQLite。_connect() 是 contextmanager，进入时创建连接并开启 WAL，退出时自动关闭。
+    # 审核日志按 message_id + group_id + user_id + time 组合键去重。
+    # seed_lexicon_db 是发布时打包进插件的内置词库，只在首次初始化时复制到 data 目录。
     def __init__(self, data_dir: Path, plugin_dir: str):
         self.data_dir = Path(data_dir)
         self.plugin_dir = Path(plugin_dir)
@@ -41,6 +44,9 @@ class SQLiteStorage:
 
     @staticmethod
     def _create_tables(conn) -> None:
+        # WAL 模式提升并发读性能，NORMAL 同步策略在 crash 后仍可恢复。
+        # meta 表存储键值对（迁移状态等），moderation_logs 存审核日志。
+        # image_urls 以 JSON 数组存储，方便 WebUI 展示。
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute(

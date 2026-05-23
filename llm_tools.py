@@ -12,6 +12,9 @@ from astrbot.api.event import AstrMessageEvent
 
 
 class LlmToolsMixin:
+    # LLM Tool 同样使用 async generator 模式。AstrBot 会根据函数签名的 event 后的参数自动生成 Tool 的 parameters schema。
+    # docstring 中的 Args 格式很重要：参数名(类型): 描述，会被 AstrBot 解析为工具的输入参数定义。
+    # _check_admin_cfg_access 同时检查功能开关和当前用户是否为插件/群管理员，保证工具不会被未授权用户调用。
     async def ban_group_member_tool(self, event: AstrMessageEvent, user_id: str, duration_minutes: int = 10):
         '''禁言群成员。当用户要求禁言某人时使用此工具。
 

@@ -13,6 +13,9 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
 
 
 class OneBotMixin:
+    # 统一封装 OneBot / AIOCQHTTP 客户端获取和 API 调用。
+    # _get_client 有多级回退：先从事件中取 -> 从缓存的 self._client 取 -> 从 platform_manager 中获取。
+    # _call_group_api 对所有群管理 API 做统一的返回值兼容处理。
     async def _get_client(self, event: AstrMessageEvent = None):
         if event:
             client = getattr(event, 'bot', None)

@@ -13,6 +13,9 @@ from astrbot.api.event import AstrMessageEvent
 
 
 class CommandsMixin:
+    # AstrBot 命令 handler 统一使用 async generator 模式：通过 yield event.plain_result() 发送回复。
+    # 每个 handler 的第一步都是调用 _check_admin_cfg_access 或 _cfg_check 做功能开关 + 权限校验。
+    # 需要调用 QQ API 时通过 _get_group_client 获取客户端，它在 main.py 初始化时注入。
     async def word_count(self, event: AstrMessageEvent):
         '''统计群内关键词出现次数'''
         ok, err = await self._check_admin_cfg_access(event, "word_count_enabled", "字数统计", need_admin=False)
