@@ -4,6 +4,7 @@ from collections import deque
 from typing import Dict, Tuple
 
 from astrbot.api import logger
+from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
 
@@ -57,6 +58,27 @@ class Main(CommandsMixin, ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin,
 
 
 _DECORATED_METHOD_MIXINS = (CommandsMixin, ModerationMixin, LlmToolsMixin)
+_ADMIN_COMMAND_METHODS = {
+    "search_member",
+    "recall_last",
+    "cmd_ban",
+    "cmd_unban",
+    "cmd_kick",
+    "cmd_whole_ban",
+    "cmd_set_card",
+    "cmd_send_notice",
+    "cmd_delete_notice",
+    "cmd_delete_file",
+    "cmd_set_name",
+    "cmd_set_title",
+    "cmd_set_essence",
+    "cmd_del_essence",
+    "cmd_set_admin",
+    "cmd_join_verify",
+    "cmd_auto_moderate",
+    "cmd_plugin_admin",
+    "recall_all",
+}
 for _mixin in _DECORATED_METHOD_MIXINS:
     for _name, _value in _mixin.__dict__.items():
         if callable(_value) and (
@@ -64,6 +86,10 @@ for _mixin in _DECORATED_METHOD_MIXINS:
             or hasattr(_value, "__decorated_event__")
             or hasattr(_value, "__decorated_platform__")
         ):
+            if _name in _ADMIN_COMMAND_METHODS:
+                _value = filter.permission_type(filter.PermissionType.ADMIN)(_value)
+            _value.__module__ = PLUGIN_NAME
+            _value.__qualname__ = f"Main.{_name}"
             setattr(Main, _name, _value)
 
 
