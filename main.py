@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import inspect
 from collections import deque
 from typing import Dict, Tuple
 
@@ -19,7 +20,7 @@ from .utils import UtilitiesMixin
 from .web import WebMixin
 
 
-class Main(CommandsMixin, ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin, Star):
+class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin, Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
         self.config = config or {}
@@ -79,6 +80,28 @@ _ADMIN_COMMAND_METHODS = {
     "cmd_plugin_admin",
     "recall_all",
 }
+
+
+def _rebind_handler(func, name):
+    if inspect.isasyncgenfunction(func):
+        async def _wrapper(self, *args, **kwargs):
+            async for item in func(self, *args, **kwargs):
+                yield item
+    else:
+        async def _wrapper(self, *args, **kwargs):
+            return await func(self, *args, **kwargs)
+    for _attr in ("__decorated__", "__decorated_event__", "__decorated_platform__"):
+        if hasattr(func, _attr):
+            setattr(_wrapper, _attr, getattr(func, _attr))
+    _wrapper.__name__ = name
+    _wrapper.__doc__ = getattr(func, "__doc__", None)
+    _wrapper.__annotations__ = dict(getattr(func, "__annotations__", {}))
+    _wrapper.__signature__ = inspect.signature(func)
+    _wrapper.__module__ = __name__
+    _wrapper.__qualname__ = f"Main.{name}"
+    return _wrapper
+
+
 for _mixin in _DECORATED_METHOD_MIXINS:
     for _name, _value in _mixin.__dict__.items():
         if callable(_value) and (
@@ -86,11 +109,14 @@ for _mixin in _DECORATED_METHOD_MIXINS:
             or hasattr(_value, "__decorated_event__")
             or hasattr(_value, "__decorated_platform__")
         ):
+            _value = _rebind_handler(_value, _name)
             if _name in _ADMIN_COMMAND_METHODS:
                 _value = filter.permission_type(filter.PermissionType.ADMIN)(_value)
-            _value.__module__ = PLUGIN_NAME
+            _value.__module__ = __name__
             _value.__qualname__ = f"Main.{_name}"
             setattr(Main, _name, _value)
+
+setattr(Main, "_search_keyword_in_messages", CommandsMixin._search_keyword_in_messages)
 
 
 Main = register(
