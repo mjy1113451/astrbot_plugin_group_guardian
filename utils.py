@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 
 from astrbot.api import logger
+from .automaton import KeywordAutomaton
 
 
 class UtilitiesMixin:
@@ -237,42 +238,24 @@ class UtilitiesMixin:
                         continue
                     escaped_parts.append(re.escape(kw))
             if escaped_parts:
-                compiled[cat_name] = self._build_combined_regex_from_escaped(escaped_parts)
-        return compiled
-
-    @staticmethod
-    def _build_combined_regex_from_escaped(escaped_parts: list, chunk_size: int = 3000) -> list:
-        # 将已 re.escape 处理过的关键词字符串用 | 拼接编译为正则列表。
-        # chunk_size=3000 控制每组拼接数量，超出则分批，避免单条正则过长导致性能下降。
-        if not escaped_parts:
-            return []
-        compiled = []
-        for i in range(0, len(escaped_parts), chunk_size):
-            chunk = escaped_parts[i:i + chunk_size]
-            combined = '|'.join(chunk)
-            try:
-                compiled.append(re.compile(combined, re.IGNORECASE))
-            except re.error:
-                for p in chunk:
-                    try:
-                        compiled.append(re.compile(p, re.IGNORECASE))
-                    except re.error:
-                        pass
+                ac = KeywordAutomaton()
+                ac.add_keywords(escaped_parts)
+                ac.build()
+                compiled[cat_name] = ac
         return compiled
 
     def _check_lexicon(self, text: str) -> Dict[str, bool]:
-        # 用预编译的词库正则逐类扫描文本，返回各分类是否命中的 dict。
+        # 用 AC 自动机逐类扫描文本，返回各分类是否命中的 dict。
         result = {}
-        text_lower = text.lower()
-        for cat_name, patterns in self._compiled_lexicon.items():
-            hit = False
-            for p in patterns:
-                m = p.search(text_lower)
-                if m:
-                    logger.debug(f"[GroupMgr] 词库命中 [{cat_name}]: 关键词='{m.group()}'")
-                    hit = True
-                    break
-            result[cat_name] = hit
+        for cat_name, automaton in self._compiled_lexicon.items():
+            if not isinstance(automaton, KeywordAutomaton):
+                continue
+            matches = automaton.iter_matches(text)
+            if matches:
+                logger.debug(f"[GroupMgr] 词库命中 [{cat_name}]: {len(matches)} 个, 示例='{matches[0][1]}'")
+                result[cat_name] = True
+            else:
+                result[cat_name] = False
         return result
 
     def _truncate(self, text: str, max_chars: int = 2000) -> str:
