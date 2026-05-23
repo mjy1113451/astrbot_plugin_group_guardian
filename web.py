@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import csv
 import io
-import time
 from collections import deque
 
 from astrbot.api import logger

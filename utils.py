@@ -195,7 +195,7 @@ class UtilitiesMixin:
             logger.error(f"[GroupMgr] 加载 SQLite 外置词库失败: {e}")
             return {}
 
-    def _compile_lexicon(self) -> Dict[str, List[re.Pattern]]:
+    def _compile_lexicon(self) -> Dict[str, "KeywordAutomaton"]:
         compiled = {}
         cfg = self.config
 
@@ -222,7 +222,7 @@ class UtilitiesMixin:
             if not switch_map.get(cat_name, True):
                 continue
             keywords = cat_data.get("keywords", [])
-            escaped_parts = []
+            raw_parts = []
             min_len = 2 if cat_name == "illegal_url" else 3
             for kw in keywords:
                 kw = kw.strip()
@@ -232,14 +232,14 @@ class UtilitiesMixin:
                     parts = [p.strip() for p in kw.split('+') if p.strip()]
                     for part in parts:
                         if len(part) >= min_len:
-                            escaped_parts.append(re.escape(part))
+                            raw_parts.append(part)
                 else:
                     if len(kw) < min_len:
                         continue
-                    escaped_parts.append(re.escape(kw))
-            if escaped_parts:
+                    raw_parts.append(kw)
+            if raw_parts:
                 ac = KeywordAutomaton()
-                ac.add_keywords(escaped_parts)
+                ac.add_keywords(raw_parts)
                 ac.build()
                 compiled[cat_name] = ac
         return compiled

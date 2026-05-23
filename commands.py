@@ -100,8 +100,9 @@ class CommandsMixin:
                             # _is_ad_pattern: 用广告模式规则判断文本是否为广告
                             is_match = self._is_ad_pattern(text)
                         elif search_type == "sensitive":
-                            # 用预编译敏感词库 _compiled_lexicon 中的 political 类别匹配
-                            is_match = any(p.search(text) for p in self._compiled_lexicon.get("political", []))
+                            # 用 AC 自动机扫描 political 分类词库
+                            ac = self._compiled_lexicon.get("political")
+                            is_match = ac.exists(text) if ac else False
                         elif search_type == "black":
                             # 黑名单类型：检查消息发送者的 QQ 号是否在 _user_black_set 中
                             sender = msg.get('sender') or {}
