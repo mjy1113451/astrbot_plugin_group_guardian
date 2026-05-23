@@ -352,7 +352,22 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
   .ranking-item{padding:6px 0}
   #disclaimerBanner{font-size:12px;padding:10px 14px}
 }
-}
+@keyframes barGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes barSlideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.bar-chart-inner{animation:barSlideIn .3s ease-out}
+.bar-col{animation:barGrow .4s ease-out;transform-origin:bottom center}
+.bar-fill{transition:height .3s ease,opacity .2s}
+.bar-col:hover .bar-fill{opacity:.75;filter:brightness(1.15)}
+.bar-hrow{transition:background .15s;border-radius:4px;padding:2px 0}
+.bar-hrow:hover{background:var(--info-light)}
+.bar-hfill{transition:width .4s ease}
+.bar-hrow:hover .bar-hcount{opacity:.9}
+.bar-hfill:hover{filter:brightness(1.1)}
+.bar-hlabel{cursor:default}
+.bar-col:hover .bar-fill-value{color:var(--text-primary);font-weight:600}
+.bar-col:hover .bar-col-label{color:var(--text-primary)}
+.dash-range-btn:active{transform:scale(.95)}
+.dash-range-btn{transition:all .15s;user-select:none}
   </style>
 </head>
 <body>
@@ -821,8 +836,13 @@ async function loadDashboard() {
 
 async function loadTrend(days) {
   var c = $('#trendChart');
+  c.innerHTML = '<p class="dash-empty" style="opacity:.5">加载中...</p>';
   var res = await safeGet('dashboard/trend', { days: days });
-  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">暂无趋势数据</p>'; return; }
+  var hasData = res && res.status !== 'error' && res.length;
+  if (!hasData) {
+    c.innerHTML = '<p class="dash-empty">近 ' + days + ' 天暂无趋势数据</p>';
+    return;
+  }
   var maxVal = 0;
   res.forEach(function(d) { maxVal = Math.max(maxVal, d.blocked, d.passed); });
   if (maxVal === 0) maxVal = 1;
@@ -834,12 +854,13 @@ async function loadTrend(days) {
     var passedH = Math.max(2, Math.round(d.passed / maxVal * cssMaxH));
     var label = d.date ? d.date.slice(5) : '';
     var total = d.blocked + d.passed;
-    html += '<div class="bar-col" title="' + esc(d.date) + ' 拦截:' + d.blocked + ' 放行:' + d.passed + '">'
+    var tip = d.date + ' | 拦截:' + d.blocked + ' 放行:' + d.passed + ' 总:' + total;
+    html += '<div class="bar-col" title="' + esc(tip) + '">'
+      + '<div class="bar-fill-value" style="margin-bottom:2px;font-size:9px;opacity:.7">' + (total || '') + '</div>'
       + '<div style="display:flex;flex-direction:column-reverse;align-items:center;width:100%;height:' + cssMaxH + 'px">'
-      + '<div class="bar-fill blocked" style="height:' + blockedH + 'px"></div>'
-      + '<div class="bar-fill passed" style="height:' + passedH + 'px"></div>'
+      + '<div class="bar-fill blocked" style="height:' + blockedH + 'px" title="拦截:' + d.blocked + '"></div>'
+      + '<div class="bar-fill passed" style="height:' + passedH + 'px" title="放行:' + d.passed + '"></div>'
       + '</div>'
-      + (total > 0 ? '<div class="bar-fill-value">' + total + '</div>' : '')
       + '<div class="bar-col-label">' + esc(label) + '</div>'
       + '</div>';
   }
@@ -848,17 +869,20 @@ async function loadTrend(days) {
 
 async function loadDistribution(days) {
   var c = $('#distChart');
+  c.innerHTML = '<p class="dash-empty" style="opacity:.5">加载中...</p>';
   var res = await safeGet('dashboard/distribution', { days: days });
-  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">暂无数据</p>'; return; }
+  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">近 ' + days + ' 天暂无违规分布数据</p>'; return; }
+  var total = res.reduce(function(s, d) { return s + d.count; }, 0);
   var maxCount = res[0].count || 1;
   var html = '';
   for (var i = 0; i < Math.min(res.length, 15); i++) {
     var d = res[i];
     var pct = Math.round(d.count / maxCount * 100);
+    var pctOfTotal = total > 0 ? Math.round(d.count / total * 100) : 0;
     var label = d.reason || '未知';
     html += '<div class="bar-hrow">'
-      + '<span class="bar-hlabel" title="' + esc(label) + '">' + esc(label) + '</span>'
-      + '<div class="bar-hfill dist" style="width:' + Math.max(pct, 2) + '%">'
+      + '<span class="bar-hlabel" title="' + esc(label) + ' (' + d.count + '次, ' + pctOfTotal + '%)">' + esc(label) + '</span>'
+      + '<div class="bar-hfill dist" style="width:' + Math.max(pct, 2) + '%" title="' + d.count + '次 / ' + pctOfTotal + '%">'
       + '<span class="bar-hcount">' + d.count + '</span>'
       + '</div></div>';
   }
@@ -867,21 +891,23 @@ async function loadDistribution(days) {
 
 async function loadHourly() {
   var c = $('#hourlyChart');
+  c.innerHTML = '<p class="dash-empty" style="opacity:.5">加载中...</p>';
   var res = await safeGet('dashboard/hourly', { days: 7 });
-  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">暂无数据</p>'; return; }
+  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">近7天暂无时段数据</p>'; return; }
   var hourMap = {};
   res.forEach(function(d) { hourMap[d.hour] = d.count; });
   var maxCount = 0;
   for (var h = 0; h < 24; h++) { maxCount = Math.max(maxCount, hourMap[h] || 0); }
   if (maxCount === 0) maxCount = 1;
+  var total = res.reduce(function(s, d) { return s + d.count; }, 0);
   var html = '';
   for (var h = 0; h < 24; h++) {
     var count = hourMap[h] || 0;
     var pct = Math.round(count / maxCount * 100);
     var label = String(h).replace(/^\d$/, '0$&') + ':00';
     html += '<div class="bar-hrow">'
-      + '<span class="bar-hlabel">' + label + '</span>'
-      + '<div class="bar-hfill hour" style="width:' + Math.max(pct, count > 0 ? 2 : 0) + '%">'
+      + '<span class="bar-hlabel" title="' + label + ' (' + count + '次)">' + label + '</span>'
+      + '<div class="bar-hfill hour" style="width:' + Math.max(pct, count > 0 ? 2 : 0) + '%" title="' + count + '次">'
       + (count > 0 ? '<span class="bar-hcount">' + count + '</span>' : '')
       + '</div></div>';
   }
@@ -890,17 +916,20 @@ async function loadHourly() {
 
 async function loadGroupRankHistory(days) {
   var c = $('#groupRankHistory');
+  c.innerHTML = '<p class="dash-empty" style="opacity:.5">加载中...</p>';
   var res = await safeGet('dashboard/group_ranking', { days: days, top: 10 });
-  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">暂无数据</p>'; return; }
+  if (!res || res.status === 'error' || !res.length) { c.innerHTML = '<p class="dash-empty">近 ' + days + ' 天暂无群排行数据</p>'; return; }
   var maxCount = res[0].count || 1;
+  var total = res.reduce(function(s, d) { return s + d.count; }, 0);
   var html = '';
   for (var i = 0; i < res.length; i++) {
     var d = res[i];
     var pct = Math.round(d.count / maxCount * 100);
-    var label = '群 ' + (d.group_id || '?');
+    var label = '群' + (d.group_id || '?');
+    var pctOfTotal = total > 0 ? Math.round(d.count / total * 100) : 0;
     html += '<div class="bar-hrow">'
-      + '<span class="bar-hlabel" title="' + esc(label) + '">' + esc(label) + '</span>'
-      + '<div class="bar-hfill dist" style="width:' + Math.max(pct, 2) + '%">'
+      + '<span class="bar-hlabel" title="' + esc(label) + ' (' + d.count + '次, ' + pctOfTotal + '%)">' + esc(label) + '</span>'
+      + '<div class="bar-hfill dist" style="width:' + Math.max(pct, 2) + '%" title="' + d.count + '次 / ' + pctOfTotal + '%">'
       + '<span class="bar-hcount">' + d.count + '</span>'
       + '</div></div>';
   }
