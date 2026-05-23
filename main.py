@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+"""AstrBot 插件主入口。
+
+贡献者约定：
+- 所有 AstrBot 注册装饰器（@filter.command、@filter.llm_tool、事件监听等）只写在本文件的 Main 类中。
+- commands.py、llm_tools.py、moderation.py 等模块只承载业务实现，不直接注册 handler。
+- 新增命令或工具时，请先在对应业务模块实现逻辑，再在 Main 类中添加一个显式转发 handler。
+"""
 import asyncio
 from collections import deque
 from typing import Dict, Tuple
@@ -61,6 +68,7 @@ class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin
     async def _search_keyword_in_messages(self, event: AstrMessageEvent, group_id: str, keyword: str, days: int, search_type: str = "all") -> Tuple[int, list]:
         return await CommandsMixin._search_keyword_in_messages(self, event, group_id, keyword, days, search_type)
 
+    # 命令注册区：新增普通命令时，请在 commands.py 写业务逻辑，再在这里添加显式转发入口。
     @filter.command("字数统计")
     async def word_count(self, event: AstrMessageEvent):
         '''统计群内关键词出现次数'''
@@ -73,6 +81,7 @@ class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin
         async for item in CommandsMixin.group_stats(self, event):
             yield item
 
+    # 管理命令注册区：需要框架管理员权限的命令必须同时保留插件内部权限校验。
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("搜索成员")
     async def search_member(self, event: AstrMessageEvent):
@@ -230,6 +239,7 @@ class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin
         async for item in CommandsMixin.recall_all(self, event):
             yield item
 
+    # LLM Tool 注册区：工具参数签名和 Args 文档会被 AstrBot 解析，请和 llm_tools.py 的业务函数保持一致。
     @filter.llm_tool(name="ban_group_member")
     async def ban_group_member_tool(self, event: AstrMessageEvent, user_id: str, duration_minutes: int = 10):
         '''禁言群成员。当用户要求禁言某人时使用此工具。
@@ -420,6 +430,7 @@ class Main(ModerationMixin, LlmToolsMixin, WebMixin, OneBotMixin, UtilitiesMixin
         async for item in LlmToolsMixin.upload_group_file_tool(self, event, file_path, file_name):
             yield item
 
+    # 消息监听注册区：审核主流程由 moderation.py 实现，这里只负责注册事件入口。
     @filter.event_message_type(filter.EventMessageType.ALL)
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def _handle_message(self, event: AiocqhttpMessageEvent):

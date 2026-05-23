@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""群管命令业务实现。
+
+本模块不注册 AstrBot 命令；命令注册统一放在 main.py 的 Main 类中。
+新增命令时，在这里实现可复用业务逻辑，再到 main.py 添加对应注册入口。
+"""
 import asyncio
 import time
 from typing import Tuple

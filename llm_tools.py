@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""LLM Tool 业务实现。
+
+本模块只保存工具执行逻辑，不直接注册 LLM Tool。
+工具的注册、名称、参数签名和文档字符串统一维护在 main.py，避免 AstrBot 将工具归属识别到子模块。
+"""
 import os
 import time
 from datetime import datetime

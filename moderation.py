@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""智能审核核心逻辑。
+
+本模块负责消息提取、正则初筛、OCR、LLM 二次判断和撤回处理。
+事件监听注册统一在 main.py，避免拆分模块被 AstrBot 识别为独立 handler 来源。
+"""
 import json
 import re
 import time

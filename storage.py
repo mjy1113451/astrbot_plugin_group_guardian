@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""SQLite 持久化层。
+
+负责审核日志、词库、迁移状态和元数据存储。
+贡献者新增持久化能力时应优先在这里封装方法，业务层不要直接操作数据库文件。
+"""
 import json
 import os
 import shutil

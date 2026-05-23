@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""OneBot/AIOCQHTTP 适配工具。
+
+集中处理客户端获取、群号/用户号解析、API 返回值兼容和权限判断。
+新增 OneBot 调用时尽量复用这里的封装，避免各业务模块重复处理平台差异。
+"""
 import time
 from typing import Tuple
 

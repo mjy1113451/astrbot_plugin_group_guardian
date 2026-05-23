@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""WebUI API 和页面数据适配。
+
+本模块只注册插件 Web 接口，不承载 AstrBot 消息 handler。
+新增 WebUI 功能时，请把数据读写封装到 storage.py 或业务模块，Web 层只做参数校验和响应转换。
+"""
 import asyncio
 import csv
 import io
