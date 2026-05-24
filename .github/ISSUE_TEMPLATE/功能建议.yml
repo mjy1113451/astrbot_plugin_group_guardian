@@ -48,3 +48,5 @@ body:
     attributes:
       value: |
         > 收到啦，会尽快评估。
+        >
+        > 想自己动手实现？欢迎提 PR 🙌
