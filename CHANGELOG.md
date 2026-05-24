@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.2.2 - 2026-05-25
+
+### 性能优化
+
+- **AC 自动机磁盘缓存**：`_compile_lexicon` 首次构建后 pickle 到 `ac_cache/<category>.pkl`，后续重载仅比较 DB 文件 mtime，未变化则 `pickle.load` 秒加载，重载从 3-4 秒缩短至 < 1 秒
+- 词库更新（`lexicon.db` 或运行时 DB 变更）自动触发缓存失效重建，无需手动清理
+- `_check_anti_flood` 逆向单次遍历：最新→最旧，越过 3600s 立即 break，O(命中范围)
+- 三档限流全设 0 时零开销跳过的早返回
+
+### 架构改进
+
+- **提取 `_anti_flood_guard` 方法**：防刷屏 30 行内联逻辑封装为独立方法，返回 `(blocked, notice)`，`_handle_message` 调用后由管线 yield 通知
+- 防刷屏检测归位到白名单检查**之后**：黑名单群跳过、白名单空则全群生效、白名单非空则仅白名单群生效，避免非目标群触发 `_is_admin` API 调用
+
+### WebUI
+
+- **设置页配置补全**：`_web_get_config` 对新配置项回退到 schema 默认值，首次加载即可看到防刷屏开关
+- Dashboard 设置页「审核设置」新增 2 个防刷屏开关（总开关 + 撤回开关），「其他设置」底部新增防刷屏数值配置（秒/分/时上限、禁言时长、撤回阈值）
+- Dashboard 新增「刷屏监控」Tab：实时追踪每群每人的消息速率，预警（红）/ 关注（黄）/ 正常（绿）状态标签
+- Web API 新增 `/anti_flood/status` 端点，返回追踪数据快照
+
+### 修复
+
+- 修复 `loadFlood is not defined`：函数定义从 `init()` 内部提升到全局作用域
+- 修复 `h is not defined`：HTML 转义改用 `esc()` 函数
+- 修复非白名单群仍在调用防刷屏逻辑（`_is_admin` API）
+- 修复 `_web_get_config` 不返回 schema 默认值导致新配置项前端不可见
+
 ## v2.2.1 - 2026-05-25
 
 ### 重大更新
