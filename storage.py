@@ -29,6 +29,12 @@ class SQLiteStorage:
         self._ensure_seed_lexicon()
         self._ensure_seed_rules()
 
+    def db_mtime(self) -> float:
+        try:
+            return self.db_path.stat().st_mtime
+        except OSError:
+            return 0.0
+
     @contextmanager
     def _connect(self):
         # 使用 contextmanager 确保连接在退出 with 块时总是通过 finally 关闭，防止泄漏。

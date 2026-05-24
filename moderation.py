@@ -747,6 +747,12 @@ class ModerationMixin:
         group_id = self._get_group_id(event)
         if not group_id:
             return
+        # 群黑名单：在黑名单中的群完全不处理（与白名单的"不处理白名单外的群"逻辑对应）。
+        if self._group_black_set and group_id in self._group_black_set:
+            return
+        # 群白名单：如果启用了白名单模式，只有白名单中的群接受审核和防刷屏检测。
+        if self._group_white_set and group_id not in self._group_white_set:
+            return
         # 防刷屏检测：所有消息类型（转发/QQ收藏/图片/JSON/App等）均计入，管理员豁免。
         user_id_flood = self._try_get_sender_id(event)
         msg_id_flood = str(getattr(getattr(event, 'message_obj', None), 'message_id', ''))
@@ -783,12 +789,6 @@ class ModerationMixin:
                         return
                     except Exception as e:
                         logger.warning(f"[GroupMgr] 防刷屏处理失败: {e}")
-        # 群黑名单：在黑名单中的群完全不处理（与白名单的"不处理白名单外的群"逻辑对应）。
-        if self._group_black_set and group_id in self._group_black_set:
-            return
-        # 群白名单：如果启用了白名单模式，只有白名单中的群接受审核。
-        if self._group_white_set and group_id not in self._group_white_set:
-            return
         if not self._should_scan_message(event):
             return
         if not self._cfg("enabled"):
