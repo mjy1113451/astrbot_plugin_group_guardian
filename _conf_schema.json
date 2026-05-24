@@ -247,28 +247,28 @@
         "hint": "开启后自动检测并处理刷屏行为（每秒/每分钟/每小时消息数超限时禁言+可选撤回）。所有消息类型均计入，包括转发、QQ收藏、图片等"
     },
     "anti_flood_rate_per_second": {
-        "description": "每秒最多消息数",
+        "description": "每秒消息上限（0=关闭本项检测）",
         "type": "int",
         "default": 5,
-        "hint": "用户每秒发送消息数超过此值即判定为刷屏"
+        "hint": "用户每秒消息数超过此值判定为刷屏。设为 0 可关闭每秒检测，仅保留分钟/小时检测"
     },
     "anti_flood_rate_per_minute": {
-        "description": "每分钟最多消息数",
+        "description": "每分钟消息上限（0=关闭本项检测）",
         "type": "int",
         "default": 20,
-        "hint": "用户每分钟发送消息数超过此值即判定为刷屏"
+        "hint": "用户每分钟消息数超过此值判定为刷屏。设为 0 可关闭每分钟检测，仅保留秒/小时检测"
     },
     "anti_flood_rate_per_hour": {
-        "description": "每小时最多消息数",
+        "description": "每小时消息上限（0=关闭本项检测）",
         "type": "int",
         "default": 60,
-        "hint": "用户每小时发送消息数超过此值即判定为刷屏"
+        "hint": "用户每小时消息数超过此值判定为刷屏。设为 0 可关闭每小时检测，仅保留秒/分钟检测"
     },
     "anti_flood_mute_duration": {
-        "description": "刷屏禁言时长（秒）",
+        "description": "刷屏禁言时长（秒，0=仅撤回不禁言）",
         "type": "int",
         "default": 300,
-        "hint": "检测到刷屏后自动禁言多少秒，默认300秒（5分钟）"
+        "hint": "检测到刷屏后自动禁言多少秒，设为 0 则只撤回不禁言。默认300秒（5分钟）"
     },
     "anti_flood_recall_enabled": {
         "description": "刷屏消息自动撤回开关",
