@@ -7,46 +7,44 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## 👋 有想法？说来听听
-
-        集 AI 审核、防刷屏、群管工具于一身，就差你的脑洞让它更好玩了 🎉
+        集 AI 审核、防刷屏、群管工具于一身，说说你还想要啥。
 
   - type: textarea
     id: suggestion
     attributes:
-      label: ✍️ 建议描述
-      description: 一句话说清楚你想要啥
-      placeholder: "比如：能不能识别 GIF 里面每一帧的内容啊..."
+      label: 建议描述
+      description: 一句话说清楚你想要什么功能或改进
+      placeholder: "比如：能不能在违规通知里 @ 一下群主..."
     validations:
       required: true
 
   - type: textarea
     id: scenario
     attributes:
-      label: 🎮 什么场景会用
-      description: 啥时候需要这个功能，解决了啥麻烦
-      placeholder: "群里老有人发黄图表情包，挡都挡不住..."
+      label: 什么场景会用
+      description: 啥时候需要这个功能，解决了什么麻烦
+      placeholder: "半夜有人发广告，群主睡着了，机器人撤了但没人知道..."
 
   - type: textarea
     id: expected
     attributes:
-      label: 🌟 你想象中的样子
-      description: 功能做出来了大概怎么用
-      placeholder: "有人发多帧动图 → 插件自动拆开 → 每帧 OCR → LLM 判违规..."
+      label: 你想象中的样子
+      description: 功能做出来之后大概怎么操作
+      placeholder: "机器人撤了一条广告 → 顺带 @ 群主说'你群刚被发了广告，已处理'"
 
   - type: textarea
     id: alternatives
     attributes:
-      label: 🤔 有没有凑合用的办法（可选）
-      description: 现在没这功能你是怎么扛过来的
+      label: 有没有凑合用的办法（可选）
+      description: 现在没这功能你是怎么凑合过来的
 
   - type: textarea
     id: context
     attributes:
-      label: 🧷 截图 / 链接 / 随便说点啥
-      description: 任何你觉得有帮助的东西
+      label: 截图 / 链接 / 随便说点啥（可选）
+      description: 任何你觉得有帮助的信息
 
   - type: markdown
     attributes:
       value: |
-        > 收到啦 🫡 作者会在一周内看看能不能搞～
+        > 收到啦，会尽快评估。

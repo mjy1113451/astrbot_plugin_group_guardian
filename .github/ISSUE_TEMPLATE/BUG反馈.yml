@@ -7,29 +7,22 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## 🛠️ 崩了？没事，盘它
-
-        提交前瞅一眼：
-        - 👌 插件已经更到最新版
-        - 👌 确认不是 AstrBot 自身的问题
-        - 👌 翻过已有的 Issue 没一样的
-
-        ---
+        崩了？盘它。提交前确认一下插件是最新版，不是 AstrBot 自身的问题，也别跟已有的 Issue 撞车。谢谢啦。
 
   - type: textarea
     id: description
     attributes:
-      label: 😫 咋了
+      label: 咋了
       description: 发生了什么灵异事件
-      placeholder: "防刷屏开启之后，白名单里的群也给禁言了..."
+      placeholder: "比如：防刷屏关了之后还在禁言..."
     validations:
       required: true
 
   - type: input
     id: plugin-version
     attributes:
-      label: 🎁 插件版本
-      description: WebUI → 插件管理 能看到
+      label: 插件版本
+      description: WebUI → 插件管理 可以看到
       placeholder: "v2.2.2"
     validations:
       required: true
@@ -37,14 +30,14 @@ body:
   - type: input
     id: astrbot-version
     attributes:
-      label: 🧠 AstrBot 版本
-      description: WebUI 底部或者启动的时候会打印
+      label: AstrBot 版本
+      description: WebUI 底部或者启动日志会打印
       placeholder: "v4.x.x"
 
   - type: dropdown
     id: platform
     attributes:
-      label: 💭 走的哪个平台
+      label: 走的哪个平台
       options:
         - QQ（NapCat / LLOneBot / go-cqhttp）
         - QQ官方（qq_official）
@@ -52,45 +45,45 @@ body:
         - 钉钉
         - Telegram
         - Discord
-        - 别的
+        - 其他
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: 🧪 怎么触发的
-      description: 一步一步来，让我能复现
+      label: 怎么触发的
+      description: 一步一步来，方便我复现
       placeholder: |
-        1. 插件设置里把防刷屏打开了...
-        2. 跑到群里狂发了十几条...
-        3. 然后就...
+        1. 插件设置里把防刷屏的开关关了...
+        2. 群里发了几条消息...
+        3. 结果机器人还是把消息给撤了...
 
   - type: textarea
     id: expected
     attributes:
-      label: 👍 本来该咋样
+      label: 本来该咋样
 
   - type: textarea
     id: actual
     attributes:
-      label: 💀 结果成了啥样
+      label: 结果成了啥样
 
   - type: textarea
     id: logs
     attributes:
-      label: 🧾 甩个日志
-      description: 把控制台那段红字原样贴过来（截图识别不了！）
+      label: 甩个日志
+      description: 把控制台那段红字/报错原样贴过来（截图我认不出来！）
       render: shell
 
   - type: textarea
     id: config
     attributes:
-      label: 🎛️ 相关配置（懒得贴也行）
-      description: 贴一下跟问题有关的设置片段
+      label: 相关配置（懒得贴也行）
+      description: 跟问题有关的设置片段
       render: json
 
   - type: markdown
     attributes:
       value: |
-        > 谢谢 🫶 日志越全修得越快 ⚡
+        > 谢谢，日志越全修得越快。
