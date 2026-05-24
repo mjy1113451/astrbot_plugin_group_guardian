@@ -398,6 +398,10 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
           <svg class="nav-icon" viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
           <span>违规记录</span>
         </a>
+        <a class="nav-item" data-tab="flood">
+          <svg class="nav-icon" viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+          <span>刷屏监控</span>
+        </a>
         <a class="nav-item" data-tab="settings">
           <svg class="nav-icon" viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
           <span>设置</span>
@@ -552,6 +556,41 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
         </div>
       </div>
 
+      <div class="tab-panel" id="tab-flood">
+        <div class="page-header">
+          <h1>刷屏监控</h1>
+          <button class="btn btn-ghost" id="btnRefreshFlood">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            刷新
+          </button>
+        </div>
+        <div class="stats-row" id="floodStatsRow">
+          <div class="stat-card stat-info"><div class="stat-body"><div class="stat-value" id="floodEnabled">--</div><div class="stat-label">防刷屏状态</div></div></div>
+          <div class="stat-card"><div class="stat-body"><div class="stat-value" id="floodTrackedGroups">--</div><div class="stat-label">追踪群数</div></div></div>
+          <div class="stat-card"><div class="stat-body"><div class="stat-value" id="floodTrackedUsers">--</div><div class="stat-label">追踪用户</div></div></div>
+          <div class="stat-card"><div class="stat-body"><div class="stat-value" id="floodActiveUsers">--</div><div class="stat-label">活跃用户</div></div></div>
+        </div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><h2>当前速率限制配置</h2></div>
+          <div style="padding:12px 18px;display:flex;gap:24px;flex-wrap:wrap">
+            <div id="floodRateSec" style="min-width:120px"><span style="color:var(--text-muted);font-size:12px">每秒上限</span><br><strong id="floodRateSecVal" style="font-size:18px">--</strong></div>
+            <div id="floodRateMin" style="min-width:120px"><span style="color:var(--text-muted);font-size:12px">每分钟上限</span><br><strong id="floodRateMinVal" style="font-size:18px">--</strong></div>
+            <div id="floodRateHour" style="min-width:120px"><span style="color:var(--text-muted);font-size:12px">每小时上限</span><br><strong id="floodRateHourVal" style="font-size:18px">--</strong></div>
+            <div style="min-width:120px"><span style="color:var(--text-muted);font-size:12px">禁言时长</span><br><strong id="floodMuteDuration" style="font-size:18px">--</strong></div>
+            <div style="min-width:120px"><span style="color:var(--text-muted);font-size:12px">撤回阈值</span><br><strong id="floodRecallThreshold" style="font-size:18px">--</strong></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>实时追踪用户</h2><span style="font-size:12px;color:var(--text-muted)" id="floodUserCount">0 人</span></div>
+          <div style="overflow-x:auto">
+            <table class="log-table" style="margin:0">
+              <thead><tr><th>群号</th><th>用户 ID</th><th>总消息数</th><th>每秒</th><th>每分钟</th><th>每小时</th><th>状态</th></tr></thead>
+              <tbody id="floodUserBody"><tr><td colspan="7" style="color:var(--text-muted);padding:32px;text-align:center">点击刷新加载数据</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <div class="tab-panel" id="tab-settings">
         <div class="page-header"><h1>设置</h1><button class="btn btn-primary btn-sm" id="btnSaveSettings">保存更改</button></div>
         <div class="lin-disclaimer-card" id="disclaimerCard">
@@ -628,6 +667,10 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
     <a class="mobile-nav-item" data-tab="records">
       <svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
       <span>违规</span>
+    </a>
+    <a class="mobile-nav-item" data-tab="flood">
+      <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+      <span>刷屏</span>
     </a>
     <a class="mobile-nav-item" data-tab="settings">
       <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
@@ -774,6 +817,7 @@ function switchTab(tabName) {
     loadAdmins();
   }
   if (tabName === 'records') { loadUsers(); loadLogs(); }
+  if (tabName === 'flood') loadFlood();
   if (tabName === 'settings') loadSettings();
 }
 
@@ -1656,6 +1700,44 @@ async function init() {
       await safePost('config', { webui_dark_mode: next === 'dark' });
     } catch(e) {}
   });
+
+  $('#btnRefreshFlood').addEventListener('click', loadFlood);
+
+  async function loadFlood() {
+    var res = await safeGet('anti_flood/status');
+    if (!res || res.status === 'error') { toast('加载刷屏数据失败', 'error'); return; }
+    var d = res;
+    $('#floodEnabled').textContent = d.enabled ? '已启用' : '未启用';
+    $('#floodEnabled').style.color = d.enabled ? 'var(--success)' : 'var(--text-muted)';
+    $('#floodTrackedGroups').textContent = d.tracked_groups || 0;
+    $('#floodTrackedUsers').textContent = d.tracked_users || 0;
+    var activeCount = 0;
+    var rows = '';
+    var groups = d.groups || {};
+    for (var gid in groups) {
+      var users = groups[gid].users || {};
+      for (var uid in users) {
+        var u = users[uid];
+        if (!u.total_msgs) continue;
+        activeCount++;
+        var statusBadge = '';
+        if (u.per_second > 3 || u.per_minute > 10) statusBadge = '<span style="background:var(--danger-light);color:var(--danger);font-size:11px;padding:2px 6px;border-radius:4px">预警</span>';
+        else if (u.per_hour > 20) statusBadge = '<span style="background:var(--warning-light);color:var(--warning);font-size:11px;padding:2px 6px;border-radius:4px">关注</span>';
+        else statusBadge = '<span style="color:var(--text-muted);font-size:11px">正常</span>';
+        rows += '<tr><td>' + h(gid) + '</td><td>' + h(uid) + '</td><td>' + u.total_msgs + '</td><td>' + u.per_second + '</td><td>' + u.per_minute + '</td><td>' + u.per_hour + '</td><td>' + statusBadge + '</td></tr>';
+      }
+    }
+    $('#floodActiveUsers').textContent = activeCount;
+    $('#floodUserCount').textContent = activeCount + ' 人';
+    $('#floodUserBody').innerHTML = rows || '<tr><td colspan="7" style="color:var(--text-muted);padding:32px;text-align:center">暂无活跃追踪数据</td></tr>';
+    if (CONFIG.anti_flood_rate_per_second != null) {
+      $('#floodRateSecVal').textContent = CONFIG.anti_flood_rate_per_second > 0 ? CONFIG.anti_flood_rate_per_second + ' 条/秒' : '已关闭';
+      $('#floodRateMinVal').textContent = CONFIG.anti_flood_rate_per_minute > 0 ? CONFIG.anti_flood_rate_per_minute + ' 条/分' : '已关闭';
+      $('#floodRateHourVal').textContent = CONFIG.anti_flood_rate_per_hour > 0 ? CONFIG.anti_flood_rate_per_hour + ' 条/时' : '已关闭';
+      $('#floodMuteDuration').textContent = CONFIG.anti_flood_mute_duration + ' 秒';
+      $('#floodRecallThreshold').textContent = CONFIG.anti_flood_recall_enabled ? (CONFIG.anti_flood_recall_threshold + ' 条') : '未开启';
+    }
+  }
 
   $('#statusDot').style.background = 'var(--success)';
   $('#statusText').textContent = '已连接';
