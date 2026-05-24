@@ -1,4 +1,4 @@
-name: 🪲 报个 bug
+name: 🪲 报告问题
 description: 报告QQ群智能守护者插件的错误或异常行为
 title: "[BUG] "
 labels: ["bug"]
@@ -7,14 +7,14 @@ body:
   - type: markdown
     attributes:
       value: |
-        崩了？盘它。提交前确认一下插件是最新版，不是 AstrBot 自身的问题，也别跟已有的 Issue 撞车。谢谢啦。
+        提交前请确认：插件已更新到最新版，问题不是 AstrBot 本体引起的，也请检查是否与已有 Issue 重复。
 
   - type: textarea
     id: description
     attributes:
-      label: 咋了
-      description: 发生了什么灵异事件
-      placeholder: "比如：防刷屏关了之后还在禁言..."
+      label: 问题描述
+      description: 发生了什么
+      placeholder: "比如：防刷屏开关关闭后仍会禁言"
     validations:
       required: true
 
@@ -22,7 +22,7 @@ body:
     id: plugin-version
     attributes:
       label: 插件版本
-      description: WebUI → 插件管理 可以看到
+      description: WebUI → 插件管理中查看
       placeholder: "v2.2.2"
     validations:
       required: true
@@ -31,13 +31,13 @@ body:
     id: astrbot-version
     attributes:
       label: AstrBot 版本
-      description: WebUI 底部或者启动日志会打印
+      description: WebUI 底部或启动日志中查看
       placeholder: "v4.x.x"
 
   - type: dropdown
     id: platform
     attributes:
-      label: 走的哪个平台
+      label: 消息平台
       options:
         - QQ（NapCat / LLOneBot / go-cqhttp）
         - QQ官方（qq_official）
@@ -52,40 +52,38 @@ body:
   - type: textarea
     id: steps
     attributes:
-      label: 怎么触发的
-      description: 一步一步来，方便我复现
+      label: 复现步骤
+      description: 如何触发这个问题
       placeholder: |
-        1. 插件设置里把防刷屏的开关关了...
-        2. 群里发了几条消息...
-        3. 结果机器人还是把消息给撤了...
+        1. 打开插件设置，关闭防刷屏开关
+        2. 在群内连续发送多条消息
+        3. 观察是否仍被禁言
 
   - type: textarea
     id: expected
     attributes:
-      label: 本来该咋样
+      label: 预期行为
 
   - type: textarea
     id: actual
     attributes:
-      label: 结果成了啥样
+      label: 实际行为
 
   - type: textarea
     id: logs
     attributes:
-      label: 甩个日志
-      description: 把控制台那段红字/报错原样贴过来（截图我认不出来！）
+      label: 日志
+      description: 粘贴控制台中的完整错误输出（请勿截图）
       render: shell
 
   - type: textarea
     id: config
     attributes:
-      label: 相关配置（懒得贴也行）
-      description: 跟问题有关的设置片段
+      label: 相关配置（可选）
+      description: 与问题相关的设置片段
       render: json
 
   - type: markdown
     attributes:
       value: |
-        > 谢谢，日志越全修得越快。
-        >
-        > 如果你已经知道怎么修，欢迎直接提 PR 🙌
+        > 日志越完整，定位越快。如果你已经知道怎么修，欢迎直接提 PR。
