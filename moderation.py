@@ -50,7 +50,8 @@ class ModerationMixin:
         recall_enabled = self._cfg("anti_flood_recall_enabled", True)
         recall_threshold = self._safe_int(self.config.get("anti_flood_recall_threshold", 20), 20)
         try:
-            await self._mute_member(event, mute_dur)
+            if mute_dur > 0:
+                await self._mute_member(event, mute_dur)
             flood_total = flood_info.get("total_msgs", flood_info.get("count", 0))
             if recall_enabled and flood_total >= recall_threshold and flood_info.get("msg_ids"):
                 for fid in flood_info["msg_ids"]:
@@ -58,15 +59,23 @@ class ModerationMixin:
                         await self._recall_msg(event, fid)
                     except Exception:
                         pass
-            notice = (
-                f"[群管] {user_name}({user_id}) 刷屏被禁言 {mute_dur} 秒"
-                f"（{flood_info['rate']} {flood_info['count']} 条/上限 {flood_info['limit']} 条）"
-            )
+            if mute_dur > 0:
+                notice = (
+                    f"[群管] {user_name}({user_id}) 刷屏被禁言 {mute_dur} 秒"
+                    f"（{flood_info['rate']} {flood_info['count']} 条/上限 {flood_info['limit']} 条）"
+                )
+                action = "禁言"
+            else:
+                notice = (
+                    f"[群管] {user_name}({user_id}) 触发刷屏处理"
+                    f"（{flood_info['rate']} {flood_info['count']} 条/上限 {flood_info['limit']} 条）"
+                )
+                action = "刷屏处理"
             if recall_enabled and flood_total >= recall_threshold:
                 notice += "，消息已撤回"
             self._log_moderation(group_id, user_id, user_name,
                                  f"[刷屏] {flood_info['rate']} {flood_info['count']}条/上限{flood_info['limit']}条",
-                                 "禁言", notice, [])
+                                 action, notice, [])
             event.stop_event()
             return True, notice
         except Exception as e:

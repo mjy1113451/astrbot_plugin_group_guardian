@@ -198,11 +198,9 @@ class WebMixin:
                     updated.append(key)
             if "auto_moderate_enabled" in updated:
                 self.auto_moderate_enabled = bool(self.config.get("auto_moderate_enabled", True))
-            # 仅在词库开关值实际变更时才重编译 AC 自动机
-            if any(
-                k in old_config and str(old_config[k]) != str(self.config.get(k, ""))
-                for k in updated
-            ):
+            # 仅在 lexicon_* 开关值实际变更时才重编译 AC 自动机
+            lexicon_updated = [k for k in updated if k.startswith("lexicon_")]
+            if any(str(old_config.get(k, "")) != str(self.config.get(k, "")) for k in lexicon_updated):
                 self._compiled_lexicon = self._compile_lexicon()
             # 防刷屏总开关关闭时清空追踪缓冲区
             if "anti_flood_enabled" in updated and old_enabled and not self._cfg("anti_flood_enabled", True):

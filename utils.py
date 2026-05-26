@@ -234,6 +234,8 @@ class UtilitiesMixin:
                     if cache_mtime >= db_mtime:
                         with open(cache_path, 'rb') as f:
                             ac = pickle.load(f)
+                        if not isinstance(ac, KeywordAutomaton):
+                            ac = None
                 except Exception:
                     pass
 
