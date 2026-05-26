@@ -13,7 +13,7 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
 from .anti_flood import AntiFloodMixin
-from .automaton import HybridMatcher, KeywordAutomaton
+from .automaton import HybridMatcher
 from .commands import CommandsMixin
 from .constants import PLUGIN_NAME, PLUGIN_VERSION
 from .llm_tools import LlmToolsMixin

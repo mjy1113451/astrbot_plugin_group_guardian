@@ -46,6 +46,9 @@ class UtilitiesMixin:
 
     def _save_config_safe(self) -> None:
         # 安全保存配置：调用 AstrBotConfig.save_config()，失败时记录异常但不抛错。
+        if not hasattr(self.config, "save_config"):
+            logger.warning("[GroupMgr] 当前配置对象不支持 save_config()，本次修改仅保留在内存中")
+            return
         try:
             self.config.save_config()
         except Exception:

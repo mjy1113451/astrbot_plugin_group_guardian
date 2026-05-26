@@ -35,6 +35,28 @@ class WebMixin:
         _wrapped.__name__ = handler.__name__
         return _wrapped
 
+    def _apply_incremental_rule_rebuild(self, category: str) -> tuple[bool, str]:
+        """尝试立即重建规则匹配器，失败时调度后台全量重建。"""
+        try:
+            self._rebuild_rule_matcher(category)
+            self._schedule_background_rebuild(f"规则分类 {category} 后台校验重建")
+            return True, ""
+        except Exception as e:
+            logger.exception("[GroupMgr] 增量重建规则失败，将转后台全量重建")
+            self._schedule_background_rebuild(f"规则分类 {category} 增量重建失败，转后台全量重建")
+            return False, str(e)
+
+    def _apply_incremental_lexicon_rebuild(self, category: str) -> tuple[bool, str]:
+        """尝试立即重建词库分类，失败时调度后台全量重建。"""
+        try:
+            self._rebuild_lexicon_category(category)
+            self._schedule_background_rebuild(f"词库分类 {category} 后台校验重建")
+            return True, ""
+        except Exception as e:
+            logger.exception("[GroupMgr] 增量重建词库分类失败，将转后台全量重建")
+            self._schedule_background_rebuild(f"词库分类 {category} 增量重建失败，转后台全量重建")
+            return False, str(e)
+
     @staticmethod
     def _parse_bool(value, default: bool = False) -> bool:
         if isinstance(value, bool):
@@ -234,11 +256,29 @@ class WebMixin:
                     self.config[key] = str(value)
                     updated.append(key)
             if "auto_moderate_enabled" in updated:
-                self.auto_moderate_enabled = bool(self.config.get("auto_moderate_enabled", True))
-            # 仅在 lexicon_* 开关值实际变更时才重编译 AC 自动机
+                self.auto_moderate_enabled = self._parse_bool(self.config.get("auto_moderate_enabled", True), True)
+            # 仅在 lexicon_* 开关值实际变更时按分类增量重建，并后台做一次全量校验重建
             lexicon_updated = [k for k in updated if k.startswith("lexicon_")]
-            if any(str(old_config.get(k, "")) != str(self.config.get(k, "")) for k in lexicon_updated):
-                self._compiled_lexicon = self._compile_lexicon()
+            changed_lexicon = [k for k in lexicon_updated if str(old_config.get(k, "")) != str(self.config.get(k, ""))]
+            if changed_lexicon:
+                lexicon_key_map = {
+                    "lexicon_political_enabled": "political",
+                    "lexicon_porn_enabled": "porn",
+                    "lexicon_violent_enabled": "violent_terror",
+                    "lexicon_reactionary_enabled": "reactionary",
+                    "lexicon_weapons_enabled": "weapons",
+                    "lexicon_corruption_enabled": "corruption",
+                    "lexicon_illegal_url_enabled": "illegal_url",
+                    "lexicon_other_enabled": "other",
+                }
+                for key in changed_lexicon:
+                    category = lexicon_key_map.get(key)
+                    if category:
+                        self._apply_incremental_lexicon_rebuild(category)
+                # other 开关还影响 supplement/livelihood/tencent_ban
+                if "lexicon_other_enabled" in changed_lexicon:
+                    for extra_category in ("supplement", "livelihood", "tencent_ban"):
+                        self._apply_incremental_lexicon_rebuild(extra_category)
             # 防刷屏总开关关闭时清空追踪缓冲区
             if "anti_flood_enabled" in updated and old_enabled and not self._cfg("anti_flood_enabled", True):
                 self._anti_flood_data.clear()
@@ -298,9 +338,8 @@ class WebMixin:
             inserted = self._storage.add_lexicon_keyword(category, keyword)
             if not inserted:
                 return jsonify({"status": "error", "message": "关键词已存在"})
-            self._rebuild_lexicon_category(category)
-            self._schedule_background_rebuild(f"词库分类 {category} 后台校验重建")
-            return jsonify({"status": "success", "data": {"category": category, "keyword": keyword}})
+            rebuilt, rebuild_err = self._apply_incremental_lexicon_rebuild(category)
+            return jsonify({"status": "success", "data": {"category": category, "keyword": keyword, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "已新增并生效" if rebuilt else f"已新增，后台重建中：{rebuild_err}"}})
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)})
         except Exception as e:
@@ -317,9 +356,8 @@ class WebMixin:
             ok = self._storage.delete_lexicon_keyword(keyword_id)
             if not ok:
                 return jsonify({"status": "error", "message": "未找到关键词"})
-            self._rebuild_lexicon_category(category)
-            self._schedule_background_rebuild(f"词库分类 {category} 后台校验重建")
-            return jsonify({"status": "success", "data": {"id": keyword_id, "category": category}})
+            rebuilt, rebuild_err = self._apply_incremental_lexicon_rebuild(category)
+            return jsonify({"status": "success", "data": {"id": keyword_id, "category": category, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "已删除并生效" if rebuilt else f"已删除，后台重建中：{rebuild_err}"}})
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)})
         except Exception as e:
@@ -360,9 +398,10 @@ class WebMixin:
             except re.error as e:
                 return jsonify({"status": "error", "message": f"正则无效: {e}"})
             saved_id = self._storage.save_moderation_rule(category, pattern, description, enabled, rule_id)
-            self._rebuild_rule_matcher(category)
-            self._schedule_background_rebuild(f"规则分类 {category} 后台校验重建")
-            return jsonify({"status": "success", "data": {"id": saved_id, "category": category}})
+            if rule_id > 0 and saved_id <= 0:
+                return jsonify({"status": "error", "message": "未找到规则"})
+            rebuilt, rebuild_err = self._apply_incremental_rule_rebuild(category)
+            return jsonify({"status": "success", "data": {"id": saved_id, "category": category, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "已保存并生效" if rebuilt else f"已保存，后台重建中：{rebuild_err}"}})
         except sqlite3.IntegrityError:
             return jsonify({"status": "error", "message": "规则已存在"})
         except ValueError as e:
@@ -381,9 +420,8 @@ class WebMixin:
             ok = self._storage.delete_moderation_rule(rule_id)
             if not ok:
                 return jsonify({"status": "error", "message": "未找到规则"})
-            self._rebuild_rule_matcher(category)
-            self._schedule_background_rebuild(f"规则分类 {category} 后台校验重建")
-            return jsonify({"status": "success", "data": {"id": rule_id, "category": category}})
+            rebuilt, rebuild_err = self._apply_incremental_rule_rebuild(category)
+            return jsonify({"status": "success", "data": {"id": rule_id, "category": category, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "已删除并生效" if rebuilt else f"已删除，后台重建中：{rebuild_err}"}})
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)})
         except Exception as e:
@@ -401,9 +439,8 @@ class WebMixin:
             ok = self._storage.toggle_moderation_rule(rule_id, enabled)
             if not ok:
                 return jsonify({"status": "error", "message": "未找到规则"})
-            self._rebuild_rule_matcher(category)
-            self._schedule_background_rebuild(f"规则分类 {category} 后台校验重建")
-            return jsonify({"status": "success", "data": {"id": rule_id, "enabled": enabled, "category": category}})
+            rebuilt, rebuild_err = self._apply_incremental_rule_rebuild(category)
+            return jsonify({"status": "success", "data": {"id": rule_id, "enabled": enabled, "category": category, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "状态已更新并生效" if rebuilt else f"状态已更新，后台重建中：{rebuild_err}"}})
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)})
         except Exception as e:

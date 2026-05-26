@@ -236,12 +236,12 @@ class SQLiteStorage:
     ) -> int:
         with self._connect() as conn:
             if rule_id > 0:
-                conn.execute(
+                cur = conn.execute(
                     "UPDATE moderation_rules SET category=?, pattern=?, description=?, enabled=? WHERE id=?",
                     (category, pattern, description, 1 if enabled else 0, rule_id),
                 )
                 conn.commit()
-                return rule_id
+                return rule_id if cur.rowcount else 0
             cur = conn.execute(
                 "INSERT INTO moderation_rules(category, pattern, enabled, description) VALUES(?, ?, ?, ?)",
                 (category, pattern, 1 if enabled else 0, description),
