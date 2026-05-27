@@ -455,6 +455,27 @@ class SQLiteStorage:
             conn.commit()
         return bool(cur.rowcount)
 
+    def add_lexicon_keywords(self, category: str, keywords: Iterable[str]) -> int:
+        values = [(category, str(k).strip()) for k in keywords if str(k).strip()]
+        if not values:
+            return 0
+        with self._connect() as conn:
+            cur = conn.executemany(
+                "INSERT OR IGNORE INTO lexicon_keywords(category, keyword) VALUES(?, ?)",
+                values,
+            )
+            conn.commit()
+        return int(cur.rowcount or 0)
+
+    def update_lexicon_keyword(self, keyword_id: int, category: str, keyword: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE lexicon_keywords SET category=?, keyword=? WHERE id=?",
+                (category, keyword, keyword_id),
+            )
+            conn.commit()
+        return bool(cur.rowcount)
+
     def delete_lexicon_keyword(self, keyword_id: int) -> bool:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM lexicon_keywords WHERE id=?", (keyword_id,))

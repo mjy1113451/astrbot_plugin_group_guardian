@@ -83,8 +83,11 @@ class WebMixin:
                 ("/lexicon/categories", self._web_get_lexicon_categories, ["GET"], "获取词库分类统计"),
                 ("/lexicon/keywords", self._web_get_lexicon_keywords, ["GET"], "分页获取分类关键词"),
                 ("/lexicon/keywords/add", self._web_add_lexicon_keyword, ["POST"], "添加词库关键词"),
+                ("/lexicon/keywords/add_batch", self._web_add_lexicon_keywords_batch, ["POST"], "批量添加词库关键词"),
+                ("/lexicon/keywords/update", self._web_update_lexicon_keyword, ["POST"], "编辑词库关键词"),
                 ("/lexicon/keywords/delete", self._web_delete_lexicon_keyword, ["POST"], "删除词库关键词"),
                 ("/lexicon/keywords/delete_batch", self._web_delete_lexicon_keywords_batch, ["POST"], "批量删除词库关键词"),
+                ("/lexicon/keywords/export", self._web_export_lexicon_keywords, ["GET"], "导出词库关键词"),
                 ("/rules", self._web_get_rules, ["GET"], "分页获取审核规则"),
                 ("/rules/save", self._web_save_rule, ["POST"], "新增或更新审核规则"),
                 ("/rules/delete", self._web_delete_rule, ["POST"], "删除审核规则"),
@@ -349,6 +352,42 @@ class WebMixin:
             logger.exception("[GroupMgr] 新增关键词失败")
             return jsonify({"status": "error", "message": str(e)})
 
+    async def _web_add_lexicon_keywords_batch(self):
+        try:
+            data = await quart_request.get_json(force=True, silent=True) or {}
+            category = str(data.get("category", "")).strip()
+            raw = str(data.get("keywords", "")).strip()
+            if not category or not raw:
+                return jsonify({"status": "error", "message": "缺少分类或关键词内容"})
+            keywords = [x.strip() for x in re.split(r"[\r\n,，]+", raw) if x.strip()]
+            added = self._storage.add_lexicon_keywords(category, keywords)
+            if added <= 0:
+                return jsonify({"status": "error", "message": "未新增任何关键词（可能都已存在）"})
+            rebuilt, rebuild_err = self._apply_incremental_lexicon_rebuild(category)
+            return jsonify({"status": "success", "data": {"category": category, "added": added, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "批量新增已生效" if rebuilt else f"已批量新增，后台重建中：{rebuild_err}"}})
+        except Exception as e:
+            logger.exception("[GroupMgr] 批量新增关键词失败")
+            return jsonify({"status": "error", "message": str(e)})
+
+    async def _web_update_lexicon_keyword(self):
+        try:
+            data = await quart_request.get_json(force=True, silent=True) or {}
+            keyword_id = self._safe_int(data.get("id", 0), 0)
+            category = str(data.get("category", "")).strip()
+            keyword = str(data.get("keyword", "")).strip()
+            if keyword_id <= 0 or not category or not keyword:
+                return jsonify({"status": "error", "message": "缺少关键词ID、分类或关键词内容"})
+            ok = self._storage.update_lexicon_keyword(keyword_id, category, keyword)
+            if not ok:
+                return jsonify({"status": "error", "message": "未找到关键词"})
+            rebuilt, rebuild_err = self._apply_incremental_lexicon_rebuild(category)
+            return jsonify({"status": "success", "data": {"id": keyword_id, "category": category, "keyword": keyword, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "关键词已更新并生效" if rebuilt else f"关键词已更新，后台重建中：{rebuild_err}"}})
+        except sqlite3.IntegrityError:
+            return jsonify({"status": "error", "message": "关键词已存在"})
+        except Exception as e:
+            logger.exception("[GroupMgr] 编辑关键词失败")
+            return jsonify({"status": "error", "message": str(e)})
+
     async def _web_delete_lexicon_keyword(self):
         try:
             data = await quart_request.get_json(force=True, silent=True) or {}
@@ -381,6 +420,25 @@ class WebMixin:
             return jsonify({"status": "success", "data": {"deleted": deleted, "category": category, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "批量删除已生效" if rebuilt else f"已批量删除，后台重建中：{rebuild_err}"}})
         except Exception as e:
             logger.exception("[GroupMgr] 批量删除关键词失败")
+            return jsonify({"status": "error", "message": str(e)})
+
+    async def _web_export_lexicon_keywords(self):
+        try:
+            category = str(quart_request.args.get("category", "")).strip()
+            query = str(quart_request.args.get("q", "")).strip()
+            if not category:
+                return jsonify({"status": "error", "message": "缺少分类"})
+            items = self._storage.list_lexicon_keywords(category, query, 100000, 0)
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["id", "category", "keyword"])
+            for item in items:
+                writer.writerow([item.get("id"), category, item.get("keyword")])
+            mem = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+            filename = f"lexicon_{category}.csv"
+            return send_file(mem, as_attachment=True, download_name=filename, mimetype="text/csv; charset=utf-8")
+        except Exception as e:
+            logger.exception("[GroupMgr] 导出关键词失败")
             return jsonify({"status": "error", "message": str(e)})
 
     async def _web_get_rules(self):
