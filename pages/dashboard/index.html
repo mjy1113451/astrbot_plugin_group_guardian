@@ -1468,7 +1468,6 @@ async function loadSettings() {
   renderOcrSettings();
   loadProviderList();
   loadMigrationStatus();
-  loadRuleCenter();
 }
 
 function renderRuleCenterShell() {
@@ -1489,7 +1488,9 @@ function renderRuleCenterShell() {
     + '  </div>'
     + '  <div style="min-width:0">'
     + '    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
-    + '      <select class="input-sm" id="kwCategory" style="width:180px"></select>'
+    + '      <input class="input-sm" id="kwCategorySearch" list="kwCategoryList" style="width:220px" placeholder="搜索或输入分类" />'
+    + '      <datalist id="kwCategoryList"></datalist>'
+    + '      <span id="kwCategoryMeta" style="font-size:12px;color:var(--text-muted)"></span>'
     + '      <input class="input-sm" id="kwQuery" style="width:150px" placeholder="搜索关键词" />'
     + '      <button class="btn btn-ghost btn-sm" id="btnKwSearch">查询</button>'
     + '    </div>'
@@ -1516,14 +1517,12 @@ function renderRuleCenterShell() {
   bindSegmented($('#rulesCategorySeg'), RULES_STATE.category, function(v) {
     RULES_STATE.category = v;
     RULES_STATE.page = 1;
-    renderRuleCenterShell();
-    loadRuleCenter();
+    loadRules();
   });
   bindSegmented($('#rulesEnabledSeg'), RULES_STATE.enabled, function(v) {
     RULES_STATE.enabled = v;
     RULES_STATE.page = 1;
-    renderRuleCenterShell();
-    loadRuleCenter();
+    loadRules();
   });
 
   $('#rulesQuery').value = RULES_STATE.q || '';
@@ -1536,7 +1535,8 @@ function renderRuleCenterShell() {
   });
   $('#btnRuleAdd').addEventListener('click', function() { openRuleEditor(); });
   $('#btnKwSearch').addEventListener('click', function() {
-    KEYWORDS_STATE.category = $('#kwCategory').value;
+    var kwCategoryInput = $('#kwCategorySearch');
+    KEYWORDS_STATE.category = kwCategoryInput ? kwCategoryInput.value.trim() : KEYWORDS_STATE.category;
     KEYWORDS_STATE.q = $('#kwQuery').value.trim();
     KEYWORDS_STATE.page = 1;
     loadKeywords();
@@ -1693,16 +1693,36 @@ function openRuleEditor(rule) {
 
 async function loadKeywordCategories() {
   var res = await safeGet('lexicon/categories');
-  var sel = $('#kwCategory');
-  if (!sel) return;
-  if (!res || res.status === 'error') { sel.innerHTML = '<option value="">加载失败</option>'; return; }
+  var input = $('#kwCategorySearch');
+  var datalist = $('#kwCategoryList');
+  var meta = $('#kwCategoryMeta');
+  if (!input || !datalist) return;
+  if (!res || res.status === 'error') {
+    datalist.innerHTML = '';
+    input.value = '';
+    if (meta) meta.textContent = '分类加载失败';
+    return;
+  }
   var items = res || [];
   if (!KEYWORDS_STATE.category && items.length) KEYWORDS_STATE.category = items[0].name;
-  sel.innerHTML = items.map(function(item) {
-    var selected = item.name === KEYWORDS_STATE.category ? ' selected' : '';
-    return '<option value="' + escAttr(item.name) + '"' + selected + '>' + esc(item.name + ' (' + item.keyword_count + ')') + '</option>';
+  datalist.innerHTML = items.map(function(item) {
+    return '<option value="' + escAttr(item.name) + '">' + esc(item.name + ' (' + item.keyword_count + ')') + '</option>';
   }).join('');
-  sel.onchange = function() { KEYWORDS_STATE.category = sel.value; KEYWORDS_STATE.page = 1; loadKeywords(); };
+  input.value = KEYWORDS_STATE.category || '';
+  if (meta) meta.textContent = '共 ' + items.length + ' 个分类';
+  var applyCategory = function() {
+    var nextVal = (input.value || '').trim();
+    if (!nextVal) return;
+    KEYWORDS_STATE.category = nextVal;
+    KEYWORDS_STATE.page = 1;
+    loadKeywords();
+  };
+  input.onchange = applyCategory;
+  input.onkeydown = function(ev) {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    applyCategory();
+  };
   loadKeywords();
 }
 
@@ -1794,7 +1814,11 @@ function openBatchAddKeywords() {
     var res = await safePost('lexicon/keywords/add_batch', { category: KEYWORDS_STATE.category, keywords: keywords });
     if (!res || res.status === 'error') { toast('批量新增失败: ' + ((res && res.message) || ''), 'error'); return; }
     closeModal();
-    toast('已批量新增关键词', 'success');
+    var msg = '新增 ' + (res.added || 0) + '，重复 ' + (res.duplicate_total || 0);
+    if (Array.isArray(res.duplicate_samples) && res.duplicate_samples.length) {
+      msg += '（如：' + res.duplicate_samples.slice(0, 3).join('、') + '）';
+    }
+    toast(msg, 'success');
     loadKeywordCategories();
     loadRebuildStatus();
   });

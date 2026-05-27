@@ -467,6 +467,29 @@ class SQLiteStorage:
             conn.commit()
         return int(cur.rowcount or 0)
 
+    def list_existing_lexicon_keywords(self, category: str, keywords: Iterable[str]) -> List[str]:
+        items = [str(k).strip() for k in keywords if str(k).strip()]
+        if not items:
+            return []
+        with self._connect() as conn:
+            if len(items) <= 900:
+                placeholders = ",".join("?" for _ in items)
+                rows = conn.execute(
+                    f"SELECT keyword FROM lexicon_keywords WHERE category=? AND keyword IN ({placeholders})",
+                    [category, *items],
+                ).fetchall()
+                return [str(r["keyword"]) for r in rows]
+            existing: List[str] = []
+            for i in range(0, len(items), 900):
+                part = items[i:i + 900]
+                placeholders = ",".join("?" for _ in part)
+                rows = conn.execute(
+                    f"SELECT keyword FROM lexicon_keywords WHERE category=? AND keyword IN ({placeholders})",
+                    [category, *part],
+                ).fetchall()
+                existing.extend(str(r["keyword"]) for r in rows)
+        return existing
+
     def update_lexicon_keyword(self, keyword_id: int, category: str, keyword: str) -> bool:
         with self._connect() as conn:
             cur = conn.execute(

@@ -359,12 +359,55 @@ class WebMixin:
             raw = str(data.get("keywords", "")).strip()
             if not category or not raw:
                 return jsonify({"status": "error", "message": "缺少分类或关键词内容"})
-            keywords = [x.strip() for x in re.split(r"[\r\n,，]+", raw) if x.strip()]
-            added = self._storage.add_lexicon_keywords(category, keywords)
-            if added <= 0:
-                return jsonify({"status": "error", "message": "未新增任何关键词（可能都已存在）"})
-            rebuilt, rebuild_err = self._apply_incremental_lexicon_rebuild(category)
-            return jsonify({"status": "success", "data": {"category": category, "added": added, "rebuilt": rebuilt, "deferred": not rebuilt, "message": "批量新增已生效" if rebuilt else f"已批量新增，后台重建中：{rebuild_err}"}})
+            parsed = [x.strip() for x in re.split(r"[\r\n,，]+", raw) if x.strip()]
+            if not parsed:
+                return jsonify({"status": "error", "message": "未解析到有效关键词"})
+            unique_keywords = []
+            seen = set()
+            duplicate_input_samples = []
+            for kw in parsed:
+                if kw in seen:
+                    if len(duplicate_input_samples) < 10 and kw not in duplicate_input_samples:
+                        duplicate_input_samples.append(kw)
+                    continue
+                seen.add(kw)
+                unique_keywords.append(kw)
+            duplicate_in_input = len(parsed) - len(unique_keywords)
+            existing_keywords = self._storage.list_existing_lexicon_keywords(category, unique_keywords)
+            existing_set = set(existing_keywords)
+            to_add = [kw for kw in unique_keywords if kw not in existing_set]
+            added = self._storage.add_lexicon_keywords(category, to_add) if to_add else 0
+            duplicate_existing = len(unique_keywords) - len(to_add)
+            duplicate_total = duplicate_in_input + duplicate_existing
+            duplicate_samples = list(duplicate_input_samples)
+            for kw in existing_keywords:
+                if len(duplicate_samples) >= 10:
+                    break
+                if kw not in duplicate_samples:
+                    duplicate_samples.append(kw)
+            rebuilt = True
+            rebuild_err = ""
+            if added > 0:
+                rebuilt, rebuild_err = self._apply_incremental_lexicon_rebuild(category)
+            msg = "批量新增已生效" if added > 0 and rebuilt else "未新增新关键词，输入内容全部重复"
+            if added > 0 and not rebuilt:
+                msg = f"已批量新增，后台重建中：{rebuild_err}"
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "category": category,
+                    "input_total": len(parsed),
+                    "parsed_unique": len(unique_keywords),
+                    "added": added,
+                    "duplicate_in_input": duplicate_in_input,
+                    "duplicate_existing": duplicate_existing,
+                    "duplicate_total": duplicate_total,
+                    "duplicate_samples": duplicate_samples,
+                    "rebuilt": rebuilt,
+                    "deferred": not rebuilt,
+                    "message": msg,
+                },
+            })
         except Exception as e:
             logger.exception("[GroupMgr] 批量新增关键词失败")
             return jsonify({"status": "error", "message": str(e)})
