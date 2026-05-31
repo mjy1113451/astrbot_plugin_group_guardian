@@ -570,7 +570,7 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
         <div class="card">
           <div class="card-header"><h2>插件管理员</h2></div>
           <div class="admin-manage">
-            <div class="admin-add-row"><input type="text" class="input-sm" id="adminInput" placeholder="输入QQ号添加管理员..." /><button class="btn btn-primary btn-sm" id="btnAddAdmin">添加</button></div>
+            <div class="admin-add-row"><input type="text" class="input-sm" id="adminInput" placeholder="QQ号(可多个,逗号/空格分隔)..." /><button class="btn btn-primary btn-sm" id="btnAddAdmin">添加</button></div>
             <div class="admin-list" id="adminList"><p class="empty">暂无管理员</p></div>
           </div>
         </div>
@@ -662,7 +662,7 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
           <div class="card-header"><h2>群超管</h2></div>
           <div class="list-manage">
             <p class="rules-subtle" style="margin-bottom:8px">为指定群单独设置插件管理员（仅该群生效，不影响其它群）。</p>
-            <div class="list-add-row"><input class="input-sm" id="saGroup" placeholder="群号" /><input class="input-sm" id="saUser" placeholder="QQ号" /><button class="btn btn-primary btn-sm" id="btnAddSuperAdmin">添加</button></div>
+            <div class="list-add-row"><input class="input-sm" id="saGroup" placeholder="群号(可多个,逗号分隔)" /><input class="input-sm" id="saUser" placeholder="QQ号(可多个,逗号分隔)" /><button class="btn btn-primary btn-sm" id="btnAddSuperAdmin">添加</button></div>
             <div class="list-items" id="superAdminList"><p class="empty">暂无</p></div>
           </div>
         </div>
@@ -683,7 +683,7 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
           <div class="card-header"><h2>群权限黑名单</h2></div>
           <div class="list-manage">
             <p class="rules-subtle" style="margin-bottom:8px">移除某群管在指定群的 bot 管理权限（优先级最高）。</p>
-            <div class="list-add-row"><input class="input-sm" id="abGroup" placeholder="群号" /><input class="input-sm" id="abUser" placeholder="QQ号" /><button class="btn btn-danger btn-sm" id="btnAddBlock">移除其权限</button></div>
+            <div class="list-add-row"><input class="input-sm" id="abGroup" placeholder="群号(可多个,逗号分隔)" /><input class="input-sm" id="abUser" placeholder="QQ号(可多个,逗号分隔)" /><button class="btn btn-danger btn-sm" id="btnAddBlock">移除其权限</button></div>
             <div class="list-items" id="blockList"><p class="empty">暂无</p></div>
           </div>
         </div>
@@ -1248,9 +1248,11 @@ function renderMembers(members) {
     var adminBtn = m.is_plugin_admin
       ? '<button class="btn btn-outline btn-sm" data-action="remove-admin" data-uid="' + esc(m.user_id) + '">移除管理</button>'
       : '<button class="btn btn-primary btn-sm" data-action="add-admin" data-uid="' + esc(m.user_id) + '">设为管理</button>';
-    // 远程操作按钮：禁言/踢（调用 remote/execute）
+    // 远程操作：禁言（可填时长分钟）/ 解禁 / 踢（群主/管理员后端会拦截并提示）
     var opBtns =
+      '<input class="input-sm rm-dur" data-uid="' + esc(m.user_id) + '" type="number" min="1" placeholder="分钟" value="10" style="width:64px" title="禁言时长(分钟)" />' +
       '<button class="btn btn-outline btn-sm" data-rm="ban" data-uid="' + esc(m.user_id) + '">禁言</button>' +
+      '<button class="btn btn-outline btn-sm" data-rm="unban" data-uid="' + esc(m.user_id) + '">解禁</button>' +
       '<button class="btn btn-danger btn-sm" data-rm="kick" data-uid="' + esc(m.user_id) + '">踢</button>';
     return '<div class="member-item">' +
       '<input type="checkbox" class="member-ck" data-uid="' + esc(m.user_id) + '" style="width:15px;height:15px;accent-color:var(--primary);flex-shrink:0" />' +
@@ -1258,7 +1260,7 @@ function renderMembers(members) {
       '<span class="member-name">' + esc(m.display_name) + '</span>' +
       '<span class="member-role ' + roleCls + '">' + roleName + '</span>' + titleHtml +
       '<span class="member-uid">' + esc(m.user_id) + '</span>' +
-      '<span class="member-actions" style="display:flex;gap:4px">' + opBtns + adminBtn + '</span></div>';
+      '<span class="member-actions" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">' + opBtns + adminBtn + '</span></div>';
   }).join('');
 
   $$('.member-avatar', $('#memberList')).forEach(function(img) {
@@ -1284,14 +1286,20 @@ function renderMembers(members) {
       openMemberPanel(CURRENT_GROUP);
     });
   });
-  // 单个远程操作（禁言默认10分钟 / 踢）
+  // 单个远程操作：禁言(读取同行时长输入)/解禁/踢
   $$('[data-rm]', $('#memberList')).forEach(function(btn) {
     btn.addEventListener('click', async function() {
       var action = btn.dataset.rm;
-      var params = { user_id: btn.dataset.uid };
-      if (action === 'ban') params.duration_minutes = 10;
+      var uid = btn.dataset.uid;
+      var params = { user_id: uid };
+      if (action === 'ban') {
+        var durInput = $('.rm-dur[data-uid="' + uid + '"]', $('#memberList'));
+        params.duration_minutes = parseInt(durInput && durInput.value) || 10;
+      }
       var r = await safePost('remote/execute', { group_id: CURRENT_GROUP, action: action, params: params });
-      toast((r && r.message) || (r && r.status === 'error' ? r.message : '已执行'), r && r.status === 'error' ? 'error' : 'success');
+      var isErr = r && r.status === 'error';
+      var msg = (r && r.message) || (r && r.data && r.data.message) || (isErr ? '操作失败' : '已执行');
+      toast(msg, isErr ? 'error' : 'success');
     });
   });
   // 批量操作
@@ -1316,7 +1324,8 @@ function renderMembers(members) {
     if (action === 'set_card') params.card = extra;
     if (action === 'set_title') params.title = extra;
     var r = await safePost('remote/execute', { group_id: CURRENT_GROUP, action: action, params: params });
-    toast((r && r.message) || '已执行', r && r.status === 'error' ? 'error' : 'success');
+    var isErr = r && r.status === 'error';
+    toast((r && r.message) || (r && r.data && r.data.message) || '已执行', isErr ? 'error' : 'success');
     CACHED_GROUP_ID = null;
     openMemberPanel(CURRENT_GROUP);
   });
@@ -2255,37 +2264,37 @@ function renderListSettings() {
   var userWhites = CONFIG._user_white_list || CONFIG.user_white_list || [];
 
   c.innerHTML =
-    '<div class="list-section"><h3>群白名单</h3><div class="list-add-row"><input type="text" class="input-sm" id="addWhiteInput" placeholder="输入群号..." /><button class="btn btn-primary btn-sm" id="btnAddWhite">添加</button></div><div class="list-items" id="whiteItems">' + renderListTags(whites, 'white') + '</div></div>' +
-    '<div class="list-section"><h3>群黑名单</h3><div class="list-add-row"><input type="text" class="input-sm" id="addBlackInput" placeholder="输入群号..." /><button class="btn btn-danger btn-sm" id="btnAddBlack">添加</button></div><div class="list-items" id="blackItems">' + renderListTags(blacks, 'black') + '</div></div>' +
-    '<div class="list-section"><h3>用户黑名单</h3><div class="list-add-row"><input type="text" class="input-sm" id="addUserInput" placeholder="输入QQ号..." /><button class="btn btn-warning btn-sm" id="btnAddUser" style="background:var(--warning);color:#fff">添加</button></div><div class="list-items" id="userItems">' + renderListTags(users, 'user') + '</div></div>' +
-    '<div class="list-section"><h3>审核白名单用户</h3><div class="list-add-row"><input type="text" class="input-sm" id="addUserWhiteInput" placeholder="输入QQ号..." /><button class="btn btn-primary btn-sm" id="btnAddUserWhite">添加</button></div><div class="setting-desc" style="margin-bottom:8px">白名单用户将跳过自动审核与防刷屏，优先级高于用户黑名单</div><div class="list-items" id="userWhiteItems">' + renderListTags(userWhites, 'userwhite') + '</div></div>';
+    '<div class="list-section"><h3>群白名单</h3><div class="list-add-row"><input type="text" class="input-sm" id="addWhiteInput" placeholder="群号(可多个,逗号/空格分隔)..." /><button class="btn btn-primary btn-sm" id="btnAddWhite">添加</button></div><div class="list-items" id="whiteItems">' + renderListTags(whites, 'white') + '</div></div>' +
+    '<div class="list-section"><h3>群黑名单</h3><div class="list-add-row"><input type="text" class="input-sm" id="addBlackInput" placeholder="群号(可多个,逗号/空格分隔)..." /><button class="btn btn-danger btn-sm" id="btnAddBlack">添加</button></div><div class="list-items" id="blackItems">' + renderListTags(blacks, 'black') + '</div></div>' +
+    '<div class="list-section"><h3>用户黑名单</h3><div class="list-add-row"><input type="text" class="input-sm" id="addUserInput" placeholder="QQ号(可多个,逗号/空格分隔)..." /><button class="btn btn-warning btn-sm" id="btnAddUser" style="background:var(--warning);color:#fff">添加</button></div><div class="list-items" id="userItems">' + renderListTags(users, 'user') + '</div></div>' +
+    '<div class="list-section"><h3>审核白名单用户</h3><div class="list-add-row"><input type="text" class="input-sm" id="addUserWhiteInput" placeholder="QQ号(可多个,逗号/空格分隔)..." /><button class="btn btn-primary btn-sm" id="btnAddUserWhite">添加</button></div><div class="setting-desc" style="margin-bottom:8px">白名单用户将跳过自动审核与防刷屏，优先级高于用户黑名单</div><div class="list-items" id="userWhiteItems">' + renderListTags(userWhites, 'userwhite') + '</div></div>';
 
   $('#btnAddWhite').addEventListener('click', async function() {
-    var val = $('#addWhiteInput').value.trim(); if (!val) return;
-    await safePost('whitelist/add', { group_id: val });
+    var vals = ($('#addWhiteInput').value || '').split(/[\s,，]+/).filter(Boolean); if (!vals.length) return;
+    for (var i = 0; i < vals.length; i++) await safePost('whitelist/add', { group_id: vals[i] });
     $('#addWhiteInput').value = '';
-    toast('已添加到白名单', 'success');
+    toast('已添加 ' + vals.length + ' 个到白名单', 'success');
     loadSettings();
   });
   $('#btnAddBlack').addEventListener('click', async function() {
-    var val = $('#addBlackInput').value.trim(); if (!val) return;
-    await safePost('blacklist/add', { group_id: val });
+    var vals = ($('#addBlackInput').value || '').split(/[\s,，]+/).filter(Boolean); if (!vals.length) return;
+    for (var i = 0; i < vals.length; i++) await safePost('blacklist/add', { group_id: vals[i] });
     $('#addBlackInput').value = '';
-    toast('已添加到黑名单', 'danger');
+    toast('已添加 ' + vals.length + ' 个到黑名单', 'danger');
     loadSettings();
   });
   $('#btnAddUser').addEventListener('click', async function() {
-    var val = $('#addUserInput').value.trim(); if (!val) return;
-    await safePost('user_blacklist/add', { user_id: val });
+    var vals = ($('#addUserInput').value || '').split(/[\s,，]+/).filter(Boolean); if (!vals.length) return;
+    for (var i = 0; i < vals.length; i++) await safePost('user_blacklist/add', { user_id: vals[i] });
     $('#addUserInput').value = '';
-    toast('已添加到用户黑名单', 'warning');
+    toast('已添加 ' + vals.length + ' 个到用户黑名单', 'warning');
     loadSettings();
   });
   $('#btnAddUserWhite').addEventListener('click', async function() {
-    var val = $('#addUserWhiteInput').value.trim(); if (!val) return;
-    await safePost('user_whitelist/add', { user_id: val });
+    var vals = ($('#addUserWhiteInput').value || '').split(/[\s,，]+/).filter(Boolean); if (!vals.length) return;
+    for (var i = 0; i < vals.length; i++) await safePost('user_whitelist/add', { user_id: vals[i] });
     $('#addUserWhiteInput').value = '';
-    toast('已添加到审核白名单', 'success');
+    toast('已添加 ' + vals.length + ' 个到审核白名单', 'success');
     loadSettings();
   });
 
@@ -2747,10 +2756,16 @@ async function init() {
   bindClick('btnSaveJoinRule', saveJoinRule);
   bindClick('btnRefreshPerms', function() { loadSuperAdmins(); loadGrants(); loadBlocks(); });
   bindClick('btnAddSuperAdmin', async function() {
-    var g = $('#saGroup').value.trim(), u = $('#saUser').value.trim();
-    if (!g || !u) { toast('请填群号和QQ', 'error'); return; }
-    await safePost('super_admin/add', { group_id: g, user_id: u });
-    toast('已添加群超管', 'success'); loadSuperAdmins();
+    var gids = ($('#saGroup').value || '').split(/[\s,，]+/).filter(Boolean);
+    var uids = ($('#saUser').value || '').split(/[\s,，]+/).filter(Boolean);
+    if (!gids.length || !uids.length) { toast('请填群号和QQ（可多个，逗号分隔）', 'error'); return; }
+    var n = 0;
+    for (var i = 0; i < gids.length; i++) {
+      for (var j = 0; j < uids.length; j++) {
+        await safePost('super_admin/add', { group_id: gids[i], user_id: uids[j] }); n++;
+      }
+    }
+    toast('已添加 ' + n + ' 条群超管', 'success'); loadSuperAdmins();
   });
   bindClick('btnSaveGrant', async function() {
     var g = $('#agGroup').value.trim();
@@ -2759,10 +2774,16 @@ async function init() {
     toast('已保存（需在设置开启总开关）', 'success'); loadGrants();
   });
   bindClick('btnAddBlock', async function() {
-    var g = $('#abGroup').value.trim(), u = $('#abUser').value.trim();
-    if (!g || !u) { toast('请填群号和QQ', 'error'); return; }
-    await safePost('admin_block/add', { group_id: g, user_id: u });
-    toast('已移除其bot权限', 'success'); loadBlocks();
+    var gids = ($('#abGroup').value || '').split(/[\s,，]+/).filter(Boolean);
+    var uids = ($('#abUser').value || '').split(/[\s,，]+/).filter(Boolean);
+    if (!gids.length || !uids.length) { toast('请填群号和QQ（可多个，逗号分隔）', 'error'); return; }
+    var n = 0;
+    for (var i = 0; i < gids.length; i++) {
+      for (var j = 0; j < uids.length; j++) {
+        await safePost('admin_block/add', { group_id: gids[i], user_id: uids[j] }); n++;
+      }
+    }
+    toast('已移除 ' + n + ' 条群管bot权限', 'success'); loadBlocks();
   });
   bindClick('btnRefreshTasks', function() { loadAppeals(); loadUnbans(); });
   bindClick('btnRefreshGroupCfg', loadGroupCfgGroups);
@@ -2844,11 +2865,11 @@ async function init() {
   });
 
   $('#btnAddAdmin').addEventListener('click', async function() {
-    var val = $('#adminInput').value.trim();
-    if (!val) return;
-    await safePost('admin/add', { user_id: val });
+    var vals = ($('#adminInput').value || '').split(/[\s,，]+/).filter(Boolean);
+    if (!vals.length) return;
+    for (var i = 0; i < vals.length; i++) await safePost('admin/add', { user_id: vals[i] });
     $('#adminInput').value = '';
-    toast('已添加管理员', 'success');
+    toast('已添加 ' + vals.length + ' 个管理员', 'success');
     loadAdmins();
   });
 

@@ -45,6 +45,8 @@ class Main(ModerationMixin, AntiFloodMixin, AppealMixin, MembershipMixin, Schedu
         self._storage.initialize()
         # 多群独立配置缓存：{group_id: {key: value(str)}}，按群懒加载，WebUI 改配置后失效
         self._group_cfg_cache = {}
+        # bot 自身 QQ 号缓存（用于群管操作前置权限检测）
+        self._bot_uin_cache = 0
         # 单群管理类名单（群白/群黑/用户黑/用户白/管理员）：v2.4.0 起以 SQLite 为准，
         # 首次启动自动从旧 config 迁移。下面会填充 group_white_list / _group_white_set 等内存结构。
         self._migrate_and_load_managed_lists()

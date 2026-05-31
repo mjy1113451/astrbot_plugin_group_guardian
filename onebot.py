@@ -162,6 +162,60 @@ class OneBotMixin:
             logger.debug(f"[GroupMgr] 获取群成员信息失败: {e}")
         return ""
 
+    async def _get_bot_uin(self, client) -> int:
+        """获取当前 bot 自身 QQ 号（带缓存）。失败返回 0。"""
+        cached = getattr(self, "_bot_uin_cache", 0)
+        if cached:
+            return cached
+        try:
+            info = await client.call_action("get_login_info")
+            info = self._extract_data_result(info)
+            uin = self._safe_int(info.get("user_id", 0), 0) if isinstance(info, dict) else 0
+            if uin:
+                self._bot_uin_cache = uin
+            return uin
+        except Exception as e:
+            logger.debug(f"[GroupMgr] 获取 bot QQ 失败: {e}")
+            return 0
+
+    async def _get_role_by_id(self, client, group_id, user_id) -> str:
+        """直接用 client 查某成员在群里的角色（member/admin/owner），无 event 版本。失败返回 ''。"""
+        gid = self._safe_int(group_id, 0)
+        uid = self._safe_int(user_id, 0)
+        if not gid or not uid or not client:
+            return ""
+        try:
+            info = await client.call_action("get_group_member_info", group_id=gid, user_id=uid, no_cache=False)
+            info = self._extract_data_result(info)
+            if isinstance(info, dict):
+                return info.get("role", "") or ""
+        except Exception as e:
+            logger.debug(f"[GroupMgr] 查询群成员角色失败({group_id}/{user_id}): {e}")
+        return ""
+
+    async def _precheck_member_action(self, client, group_id, target_uid, action: str) -> Tuple[bool, str]:
+        """群成员操作前置校验：检查 bot 自身权限 + 目标角色，避免必然失败的调用。
+
+        规则（OneBot/QQ 平台限制）：
+          - bot 必须是管理员或群主，否则无法禁言/踢人/改名片等；
+          - 不能对群主执行（禁言/踢/改名片）；
+          - 普通管理员（bot 非群主）不能操作其他管理员。
+        仅对写操作做检查；返回 (允许, 错误说明)。
+        """
+        # 仅这些操作需要目标角色保护
+        if action not in ("ban", "kick", "set_card", "set_title", "set_admin", "unset_admin"):
+            return True, ""
+        bot_uin = await self._get_bot_uin(client)
+        bot_role = await self._get_role_by_id(client, group_id, bot_uin) if bot_uin else ""
+        if bot_role not in ("admin", "owner"):
+            return False, "机器人在该群不是管理员/群主，无法执行群管操作"
+        target_role = await self._get_role_by_id(client, group_id, target_uid)
+        if target_role == "owner":
+            return False, "目标是群主，无法操作"
+        if target_role == "admin" and bot_role != "owner":
+            return False, "目标是管理员，机器人需为群主才能操作"
+        return True, ""
+
     def _check_group_access(self, event: AstrMessageEvent) -> Tuple[bool, str]:
         group_id = self._get_group_id(event)
         if not group_id:
@@ -192,8 +246,13 @@ class OneBotMixin:
         cfg_key: str,
         feature_name: str,
         user_id,
+        precheck_action: str = "",
     ) -> Tuple[bool, str, object, int, int]:
-        """统一准备群成员操作所需的权限、client、群号和目标 QQ 号。"""
+        """统一准备群成员操作所需的权限、client、群号和目标 QQ 号。
+
+        precheck_action 非空时，额外做 bot 自身权限 + 目标角色（群主/管理员）预检，
+        避免对群主/管理员执行必然失败的操作。
+        """
         ok, err = await self._check_admin_cfg_access(event, cfg_key, feature_name)
         if not ok:
             return False, err, None, 0, 0
@@ -203,6 +262,10 @@ class OneBotMixin:
         uid = self._safe_int(user_id, 0)
         if not uid:
             return False, "用户QQ号格式无效", None, 0, 0
+        if precheck_action:
+            ok_pre, pre_msg = await self._precheck_member_action(client, gid, uid, precheck_action)
+            if not ok_pre:
+                return False, pre_msg, None, 0, 0
         return True, "", client, gid, uid
 
     async def _prepare_group_action(

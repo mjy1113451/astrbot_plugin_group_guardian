@@ -48,6 +48,12 @@ class RemoteMixin:
         params = params or {}
         uid = self._safe_int(user_id, 0) if user_id else 0
 
+        # 写操作前置校验：bot 自身权限 + 目标角色（群主/管理员保护），避免必然失败的调用
+        if uid:
+            ok_pre, pre_msg = await self._precheck_member_action(client, gid, uid, action)
+            if not ok_pre:
+                return False, pre_msg
+
         if action == "ban":
             minutes = self._clamp_int(params.get("duration_minutes", 10), 10, 1, 43200)
             ok, err = await self._call_group_api(client, "set_group_ban", "禁言",

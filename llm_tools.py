@@ -31,7 +31,7 @@ class LlmToolsMixin:
             duration_minutes(number): 禁言时长（分钟），默认10分钟
         '''
         try:
-            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "ban_enabled", "禁言", user_id)
+            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "ban_enabled", "禁言", user_id, precheck_action="ban")
             if not ok:
                 yield event.plain_result(err)
                 return
@@ -78,7 +78,7 @@ class LlmToolsMixin:
             user_id(string): 要踢出的用户QQ号
         '''
         try:
-            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "kick_enabled", "踢人", user_id)
+            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "kick_enabled", "踢人", user_id, precheck_action="kick")
             if not ok:
                 yield event.plain_result(err)
                 return

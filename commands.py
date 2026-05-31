@@ -244,7 +244,7 @@ class CommandsMixin:
             user_id = str(args[1]).strip()
             # _safe_int 防止 args[2] 为非数字时崩溃；默认 10 分钟；上限 43200 分钟（30 天），因为 OneBot 对此有限制
             duration = min(max(self._safe_int(args[2], 10) if len(args) > 2 else 10, 1), 43200)
-            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "ban_enabled", "禁言", user_id)
+            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "ban_enabled", "禁言", user_id, precheck_action="ban")
             if not ok:
                 yield event.plain_result(err)
                 return
@@ -287,7 +287,7 @@ class CommandsMixin:
             return
         try:
             user_id = str(args[1]).strip()
-            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "kick_enabled", "踢人", user_id)
+            ok, err, client, gid, uid = await self._prepare_group_member_action(event, "kick_enabled", "踢人", user_id, precheck_action="kick")
             if not ok:
                 yield event.plain_result(err)
                 return
