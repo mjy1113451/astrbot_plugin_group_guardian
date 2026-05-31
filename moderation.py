@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import re
+import time
 from typing import Dict, Optional, Tuple
 
 from astrbot.api import logger
@@ -38,6 +39,51 @@ class ModerationMixin:
     6.  违规处理（撤回 + 记录日志）
     """
 
+    def _moderation_in_penalty_cooldown(self, group_id: str, user_id: str) -> bool:
+        """判断某用户是否处于内容审核处罚冷却期内（到期自动清理标记）。
+
+        用于内容审核（黑名单/正则/LLM 违规）处罚后，吸收"处罚已生效但事件队列里
+        仍排着该用户多条消息"导致的重复禁言/重复通知/重复登记解禁。
+        与防刷屏冷却相互独立。违规消息本身仍会逐条撤回，只是不重复禁言与通知。
+        """
+        store = getattr(self, "_moderation_penalty_until", None)
+        if not store:
+            return False
+        users = store.get(group_id)
+        if not users:
+            return False
+        until = users.get(user_id, 0.0)
+        if until <= 0:
+            return False
+        if time.time() >= until:
+            users.pop(user_id, None)
+            if not users:
+                store.pop(group_id, None)
+            return False
+        return True
+
+    def _mark_moderation_penalty(self, group_id: str, user_id: str, cooldown_seconds: int) -> None:
+        """登记一次内容审核处罚的冷却到期时间（惰性初始化存储）。"""
+        if not group_id or not user_id:
+            return
+        if cooldown_seconds <= 0:
+            cooldown_seconds = 60
+        store = getattr(self, "_moderation_penalty_until", None)
+        if store is None:
+            store = {}
+            self._moderation_penalty_until = store
+        users = store.setdefault(group_id, {})
+        users[user_id] = time.time() + cooldown_seconds
+        # 顺带回收已过期的标记，防止长期残留
+        now = time.time()
+        for gid in list(store.keys()):
+            gusers = store[gid]
+            for uid in list(gusers.keys()):
+                if now >= gusers[uid]:
+                    del gusers[uid]
+            if not gusers:
+                del store[gid]
+
     async def _anti_flood_guard(self, event, group_id: str) -> Tuple[bool, str]:
         """防刷屏检测入口。记录时间戳，超限后禁言并可选撤回。
 
@@ -56,6 +102,12 @@ class ModerationMixin:
             return False, None
         if await self._is_admin(event):
             return False, None
+        # 处罚冷却：用户刚被刷屏处罚后进入冷却期，期间其积压/后续消息只静默忽略，
+        # 不再重复禁言/撤回/记日志/开申诉。这能挡住"处罚已生效但事件队列里还排着该用户
+        # 多条消息"导致的重复处罚刷屏（被禁言者其实已发不出新消息）。
+        if self._anti_flood_in_cooldown(group_id, user_id):
+            event.stop_event()
+            return True, None
         raw_message = getattr(getattr(event, 'message_obj', None), 'message', None)
         msg_text = self._format_message_content(raw_message)
         self._record_message(group_id, user_id, msg_id, msg_text)
@@ -67,6 +119,11 @@ class ModerationMixin:
         mute_dur = self._cfg_int("anti_flood_mute_duration", 300, group_id=group_id)
         recall_enabled = self._cfg("anti_flood_recall_enabled", True, group_id=group_id)
         recall_threshold = self._cfg_int("anti_flood_recall_threshold", 20, group_id=group_id)
+        # 立即登记处罚冷却并清空该用户计数队列：必须在执行禁言/撤回等 await 之前完成，
+        # 否则 await 期间其它积压消息的协程会先跑完检测、造成重复处罚。
+        # 冷却时长取禁言时长与一个最小值的较大者（仅撤回不禁言时也保证有冷却窗口）。
+        cooldown = mute_dur if mute_dur > 0 else self._cfg_int("anti_flood_recall_threshold", 20, group_id=group_id)
+        self._mark_anti_flood_penalty(group_id, user_id, max(cooldown, 30))
         try:
             if mute_dur > 0:
                 await self._mute_member(event, mute_dur)
@@ -848,7 +905,12 @@ class ModerationMixin:
         # 用户黑名单：直接踢出+禁言，不经过审核流程。
         if self._user_black_set:
             if user_id and user_id in self._user_black_set:
+                # 冷却去重：刚处理过的黑名单用户，其积压消息不再重复踢人/禁言/通知
+                if self._moderation_in_penalty_cooldown(group_id, user_id):
+                    event.stop_event()
+                    return
                 try:
+                    self._mark_moderation_penalty(group_id, user_id, 60)
                     await self._kick_member(event)
                     await self._mute_member(event, 60)
                     notice = self.config.get("ban_notice", "[群管] {name}({uid}) 已被踢出（黑名单）")
@@ -1019,7 +1081,14 @@ class ModerationMixin:
             logger.info(f"[GroupMgr] {user_name}({user_id}) in {group_id} -> {reason}")
             try:
                 msg_id = str(getattr(getattr(event, 'message_obj', None), 'message_id', ''))
+                # 违规消息始终撤回；但禁言/通知/登记解禁在冷却期内不重复执行，
+                # 避免连发多条违规时重复禁言同一人并刷多条通知。
                 await self._recall_msg(event, msg_id)
+                if self._moderation_in_penalty_cooldown(group_id, user_id):
+                    self._log_moderation(group_id, user_id, user_name, text, "撤回", reason, image_urls)
+                    event.stop_event()
+                    return
+                self._mark_moderation_penalty(group_id, user_id, self._safe_int(self.config.get("moderation_ban_duration", 1800), 1800))
                 await self._mute_member(event)
                 self._schedule_unban(group_id, user_id, self._safe_int(self.config.get("moderation_ban_duration", 1800), 1800))
                 notice = self.config.get("ban_notice", "[群管] {name}({uid}) 已被禁言（触发规则）")
@@ -1054,6 +1123,15 @@ class ModerationMixin:
                     await self._recall_msg(event, msg_id)
                 except Exception as recall_err:
                     logger.warning(f"[GroupMgr] 撤回消息失败: {recall_err}")
+
+            # 冷却去重：违规消息已撤回；禁言/通知/登记解禁在冷却期内不重复执行，
+            # 避免连发多条违规时重复禁言同一人并刷多条通知。
+            in_cooldown = self._moderation_in_penalty_cooldown(group_id, user_id)
+            if in_cooldown:
+                self._log_moderation(group_id, user_id, user_name, text, "LLM撤回", reason, image_urls)
+                event.stop_event()
+                return
+            self._mark_moderation_penalty(group_id, user_id, self._safe_int(self.config.get("moderation_ban_duration", 1800), 1800))
 
             if self._cfg("llm_moderation_ban", True, group_id=group_id):
                 try:

@@ -29,6 +29,14 @@ class AppealMixin:
             return
         if not group_id or not user_id:
             return
+        # 申诉去重：该用户已有 waiting 申诉时，不再新建、不再群内 @，
+        # 避免重复处罚（或快速二次刷屏）导致反复 @ 当事人、反复作废旧申诉的骚扰。
+        try:
+            existing = self._storage.get_waiting_appeal(user_id)
+            if existing and str(existing.get("group_id", "")) == str(group_id):
+                return
+        except Exception as _e:
+            logger.debug(f"[GroupMgr] 查询已有申诉失败: {_e}")
         window_min = self._cfg_int("appeal_window_minutes", 10, group_id=group_id)
         window_min = max(1, min(window_min, 1440))
         now = int(time.time())
@@ -83,13 +91,24 @@ class AppealMixin:
             return
 
         group_id = appeal.get("group_id", "")
+
+        # 并发互斥：原子地把申诉从 waiting 抢占为 judging。用户连发多条私聊时只有第一条
+        # 能抢到，后续请求抢不到直接退出，避免重复调用 LLM 复核、重复解禁、重复回复。
+        if not self._storage.claim_appeal(appeal["id"], "waiting", "judging"):
+            return
+
         yield event.plain_result("已收到你的申诉，正在结合群内记录复核，请稍候…")
 
         try:
             verdict = await self._judge_appeal(group_id, user_id, statement, appeal)
         except Exception as e:
             logger.warning(f"[GroupMgr] 申诉复核出错: {e}")
-            yield event.plain_result("复核过程出错，处罚暂维持，请稍后联系管理员。")
+            # 复核失败：把状态回滚为 waiting，允许用户稍后重新申诉（在窗口期内）
+            try:
+                self._storage.claim_appeal(appeal["id"], "judging", "waiting")
+            except Exception:
+                pass
+            yield event.plain_result("复核过程出错，处罚暂维持，请稍后再发一次申诉。")
             return
 
         now = int(time.time())

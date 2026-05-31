@@ -913,11 +913,28 @@ class SQLiteStorage:
             conn.commit()
         return bool(cur.rowcount)
 
+    def claim_appeal(self, appeal_id: int, expect_status: str = "waiting", new_status: str = "judging") -> bool:
+        """原子抢占申诉：仅当当前状态为 expect_status 时才改为 new_status，返回是否抢到。
+
+        用于并发互斥：用户连发多条私聊申诉时，只有第一条能把 waiting 抢成 judging，
+        后续请求 rowcount=0 抢不到，从而避免重复调用 LLM 复核与重复解禁。
+        SQLite 单条 UPDATE 自带行级原子性，配合 WHERE status 条件即为 CAS。
+        """
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE appeals SET status=? WHERE id=? AND status=?",
+                (new_status, int(appeal_id), expect_status),
+            )
+            conn.commit()
+        return bool(cur.rowcount)
+
     def list_expired_waiting_appeals(self, now_ts: int) -> List[dict]:
-        # 列出已过期但仍是 waiting 的申诉，供后台任务标记 expired。
+        # 列出已过期且仍未裁决的申诉（waiting 或卡住的 judging），供后台任务标记 expired。
+        # judging 是裁决中间态，正常会很快转为终态；若插件在裁决途中崩溃/重载会卡在此态，
+        # 这里一并按超时回收，避免该用户永久无法再申诉。
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM appeals WHERE status='waiting' AND expire_at <= ?",
+                "SELECT * FROM appeals WHERE status IN ('waiting','judging') AND expire_at <= ?",
                 (int(now_ts),),
             ).fetchall()
         return [self._appeal_row_to_dict(r) for r in rows]

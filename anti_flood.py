@@ -27,6 +27,37 @@ class AntiFloodMixin:
         """初始化防刷屏追踪数据字典和清理时间戳。"""
         self._anti_flood_data: Dict[str, Dict[str, deque]] = {}
         self._anti_flood_last_cleanup = 0.0
+        # 处罚冷却表：{group_id: {user_id: 冷却到期时间戳}}。
+        # 触发处罚后进入冷却，期间该用户的消息只静默处理，不再重复禁言/记日志/开申诉，
+        # 用于吸收"处罚决定做出后仍在事件队列里排队的积压消息"，避免重复处罚刷屏。
+        self._anti_flood_penalty_until: Dict[str, Dict[str, float]] = {}
+
+    def _anti_flood_in_cooldown(self, group_id: str, user_id: str) -> bool:
+        """判断某用户当前是否处于防刷屏处罚冷却期内（到期自动清理标记）。"""
+        users = self._anti_flood_penalty_until.get(group_id)
+        if not users:
+            return False
+        until = users.get(user_id, 0.0)
+        if until <= 0:
+            return False
+        if time.time() >= until:
+            users.pop(user_id, None)
+            if not users:
+                self._anti_flood_penalty_until.pop(group_id, None)
+            return False
+        return True
+
+    def _mark_anti_flood_penalty(self, group_id: str, user_id: str, cooldown_seconds: int) -> None:
+        """登记一次防刷屏处罚：设置冷却到期时间，并清空该用户的消息计数队列。
+
+        清空队列是关键：否则冷却结束后窗口内残留的旧消息会让用户立刻再次命中阈值。
+        """
+        if cooldown_seconds <= 0:
+            cooldown_seconds = 60
+        self._anti_flood_penalty_until.setdefault(group_id, {})[user_id] = time.time() + cooldown_seconds
+        group_q = self._anti_flood_data.get(group_id)
+        if group_q and user_id in group_q:
+            group_q[user_id].clear()
 
     def _normalize_message_text(self, text: str) -> str:
         """归一化消息文本，便于重复消息检测。"""
@@ -195,6 +226,13 @@ class AntiFloodMixin:
                     del users[uid]
             if not users:
                 del self._anti_flood_data[gid]
+        # 同步清理已到期的处罚冷却标记，避免冷却表长期残留
+        for gid, users in list(self._anti_flood_penalty_until.items()):
+            for uid in list(users.keys()):
+                if now >= users[uid]:
+                    del users[uid]
+            if not users:
+                del self._anti_flood_penalty_until[gid]
 
     def _get_anti_flood_status(self) -> dict:
         """返回防刷屏追踪快照，供 WebUI 仪表盘 API 使用。
