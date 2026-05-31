@@ -12,6 +12,34 @@ class CommandsMixin:
     # 每个 handler 的第一步都是调用 _check_admin_cfg_access 或 _cfg_check 做功能开关 + 权限校验。
     # 需要调用 QQ API 时通过 _get_group_client 获取客户端，它在 main.py 初始化时注入。
 
+    def _extract_at_targets(self, event: AstrMessageEvent) -> list:
+        """从消息链提取所有被 @ 的 QQ 号（按出现顺序，去重，排除 @全体）。
+
+        兼容 dict 段格式与对象段格式；@全体（qq='all'/0）会被忽略。
+        """
+        targets = []
+        seen = set()
+        try:
+            chain = event.get_messages() or []
+        except Exception:
+            chain = []
+        for seg in chain:
+            qq = None
+            if isinstance(seg, dict):
+                if seg.get("type") == "at":
+                    qq = (seg.get("data", {}) or {}).get("qq", "")
+            else:
+                seg_cls = type(seg).__name__
+                if seg_cls == "At" or (hasattr(seg, "type") and getattr(seg, "type", "") == "at"):
+                    qq = getattr(seg, "qq", "") or ""
+            qq = str(qq).strip()
+            if not qq or qq.lower() in ("all", "0"):
+                continue
+            if qq not in seen and qq.isdigit():
+                seen.add(qq)
+                targets.append(qq)
+        return targets
+
     async def word_count(self, event: AstrMessageEvent):
         '''统计群内关键词出现次数'''
         # 拆分命令参数：/字数统计 <关键词> [天数] [类型]
@@ -601,26 +629,61 @@ class CommandsMixin:
             yield event.plain_result(f"取消失败: {e}")
 
     async def cmd_set_admin(self, event: AstrMessageEvent):
-        '''设置或取消群管理员。用法: /设置管理 <QQ号>'''
-        args = event.message_str.split()
-        if len(args) < 2:
-            yield event.plain_result("用法: /设置管理 <QQ号>\n示例: /设置管理 123456")
+        '''设置或取消群管理员。用法: /设置管理 @某人 或 <QQ号> [设置/取消]'''
+        group_id = self._get_group_id(event)
+        if not group_id:
+            yield event.plain_result("请在群内使用此命令")
             return
+        # 权限：仅“白名单群的群主”或“插件全局管理员”可设置/取消本群管理员。
+        # 设置管理员属于高敏感操作，普通群管不应能借此扩张管理层。
+        operator = self._try_get_sender_id(event)
+        is_plugin_admin = await self._is_plugin_admin(event)
+        if not is_plugin_admin:
+            # 必须是白名单群（未设白名单时不开放群主自助设管理，避免任意群群主滥用）
+            if not (self._group_white_set and group_id in self._group_white_set):
+                yield event.plain_result("此功能仅对白名单群开放，请联系插件管理员将本群加入白名单")
+                return
+            role = await self._get_member_role(event, group_id, operator)
+            if role != "owner":
+                yield event.plain_result("仅本群群主或插件管理员可以设置/取消群管理员")
+                return
+        # 目标：优先取 @，否则取文本里的 QQ 号
+        at_targets = self._extract_at_targets(event)
+        args = event.message_str.split()
+        enable = True
+        # 解析“设置/取消”动作（可出现在任意位置）
+        for tok in args[1:]:
+            t = tok.strip().lower()
+            if t in ("取消", "移除", "off", "0", "false", "down", "unset"):
+                enable = False
+            elif t in ("设置", "添加", "on", "1", "true", "set"):
+                enable = True
+        if at_targets:
+            user_id = at_targets[0]
+        else:
+            # 从文本参数里找第一个纯数字 QQ 号
+            user_id = ""
+            for tok in args[1:]:
+                tok = tok.strip()
+                if tok.isdigit():
+                    user_id = tok
+                    break
+            if not user_id:
+                yield event.plain_result("用法: /设置管理 @某人 [设置/取消]\n或: /设置管理 <QQ号> [设置/取消]\n示例: /设置管理 @张三 设置")
+                return
         try:
-            user_id = str(args[1]).strip()
             ok, err, client, gid, uid = await self._prepare_group_member_action(event, "set_admin_enabled", "设置管理员", user_id)
             if not ok:
                 yield event.plain_result(err)
                 return
             # set_group_admin: OneBot API，enable=True 设为管理员，False 取消管理员
-            # 注意：此方法始终执行 enable=True（设为管理员），如需取消需添加单独命令
-            ok, err = await self._call_group_api(client, 'set_group_admin', "设置管理员", group_id=gid, user_id=uid, enable=True)
+            ok, err = await self._call_group_api(client, 'set_group_admin', "设置管理员", group_id=gid, user_id=uid, enable=enable)
             if not ok:
-                yield event.plain_result(f"设置失败: {err}")
+                yield event.plain_result(f"{'设置' if enable else '取消'}失败: {err}")
                 return
-            yield event.plain_result(f"已将 {user_id} 设为群管理员")
+            yield event.plain_result(f"已{'将 ' + user_id + ' 设为群管理员' if enable else '取消 ' + user_id + ' 的群管理员'}")
         except Exception as e:
-            yield event.plain_result(f"设置失败: {e}")
+            yield event.plain_result(f"操作失败: {e}")
 
     async def cmd_join_verify(self, event: AstrMessageEvent):
         '''修改入群验证方式。用法: /加群方式 <需要验证/允许/禁止>'''
@@ -649,10 +712,10 @@ class CommandsMixin:
 
     async def cmd_auto_moderate(self, event: AstrMessageEvent):
         '''开关智能审核功能。用法: /自动审核 开启/关闭/状态'''
-        # 此方法不通过 _check_admin_cfg_access，而是直接检查是否为 QQ 管理员
-        # 因为 auto_moderate 是插件内部功能，其开关不依赖群配置项
-        if not await self._is_admin(event):
-            yield event.plain_result("仅管理员可以使用此功能")
+        # 自动审核是插件全局运行开关，影响所有群，必须由插件全局管理员操作，
+        # 群主/群管的群角色授权不足以更改全局开关。
+        if not await self._is_plugin_admin(event):
+            yield event.plain_result("仅插件管理员可以使用此功能")
             return
         args = event.message_str.split()
         if len(args) < 2:
@@ -676,9 +739,10 @@ class CommandsMixin:
 
     async def cmd_plugin_admin(self, event: AstrMessageEvent):
         '''管理插件管理员列表。用法: /设置管理插件 <QQ号> 添加/移除'''
-        # 同样直接检查 QQ 管理员身份而非群配置，因为管理员列表是插件全局级别的
-        if not await self._is_admin(event):
-            yield event.plain_result("仅管理员可以使用此功能")
+        # 管理“全局插件管理员名单”是最高敏感操作（决定谁能跨群管理整个插件），
+        # 必须仅限现有插件全局管理员，群主/群管的群角色授权严禁修改此名单（防提权）。
+        if not await self._is_plugin_admin(event):
+            yield event.plain_result("仅插件管理员可以使用此功能")
             return
         args = event.message_str.split()
         if len(args) < 2:
@@ -825,12 +889,16 @@ class CommandsMixin:
 
     async def cmd_group_admin_grant(self, event: AstrMessageEvent):
         '''群管理员授权开关（F5）。用法: /群管理授权 开启/关闭/状态'''
-        if not await self._is_admin(event):
-            yield event.plain_result("仅管理员可以使用此功能")
-            return
         group_id = self._get_group_id(event)
         if not group_id:
             yield event.plain_result("请在群内使用此命令")
+            return
+        # 仅群主或插件全局管理员可改本群授权策略（与 /移除群管权限 一致）。
+        # 不放给普通群管，避免被授权的群管反过来扩大或锁定授权范围。
+        operator = self._try_get_sender_id(event)
+        role = await self._get_member_role(event, group_id, operator)
+        if role != "owner" and not await self._is_plugin_admin(event):
+            yield event.plain_result("仅群主或插件管理员可以管理本群的群管理授权")
             return
         args = event.message_str.split()
         if len(args) < 2:
@@ -849,7 +917,7 @@ class CommandsMixin:
         if action in ("开启", "on", "1"):
             self._storage.save_group_admin_grant(group_id, grant_owner=True, grant_admin=True, enabled=True)
             self._admin_role_cache.clear()
-            yield event.plain_result("已开启本群群管理员授权（群主+管理员自动获得插件管理权限，被下管理后失效）")
+            yield event.plain_result("已开启本群群管理员授权（群主+管理员在本群自动获得群管操作权限，被下管理后失效）")
         elif action in ("关闭", "off", "0"):
             self._storage.save_group_admin_grant(group_id, grant_owner=True, grant_admin=True, enabled=False)
             self._admin_role_cache.clear()

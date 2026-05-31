@@ -338,10 +338,10 @@ class Main(ModerationMixin, AntiFloodMixin, AppealMixin, MembershipMixin, Schedu
         async for item in CommandsMixin.cmd_del_essence(self, event):
             yield item
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
+    # 设置管理：权限在方法内精细校验（白名单群群主 / 插件管理员），故不加框架级 ADMIN 限制
     @filter.command("设置管理")
     async def cmd_set_admin(self, event: AstrMessageEvent):
-        '''设置或取消群管理员。用法: /设置管理 <QQ号>'''
+        '''设置或取消群管理员。用法: /设置管理 @某人 或 <QQ号> [设置/取消]'''
         async for item in CommandsMixin.cmd_set_admin(self, event):
             yield item
 

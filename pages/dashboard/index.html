@@ -398,7 +398,7 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","P
         <div class="logo-icon">G</div>
         <div class="logo-text">
           <span class="logo-title">Group Guardian</span>
-          <span class="logo-ver" id="logoVer">v2.3.1</span>
+          <span class="logo-ver" id="logoVer">v2.3.2</span>
         </div>
       </div>
       <nav class="sidebar-nav">
@@ -951,6 +951,53 @@ function showModal(title, bodyHtml, footerHtml) {
 }
 function closeModal() { $('#modalOverlay').style.display = 'none'; }
 
+// 通用确认弹窗：返回 Promise<boolean>。用于替代直接执行的高危操作，统一交互。
+// opts: { title, body(html), okText, cancelText, danger(bool) }
+function confirmModal(opts) {
+  opts = opts || {};
+  var okText = opts.okText || '确认';
+  var cancelText = opts.cancelText || '取消';
+  var okCls = opts.danger ? 'btn-danger' : 'btn-primary';
+  return new Promise(function(resolve) {
+    showModal(
+      opts.title || '请确认',
+      '<div style="line-height:1.7;font-size:13px;color:var(--text-secondary)">' + (opts.body || '') + '</div>',
+      '<button class="btn btn-ghost btn-sm" id="__cmCancel">' + esc(cancelText) + '</button>' +
+      '<button class="btn ' + okCls + ' btn-sm" id="__cmOk">' + esc(okText) + '</button>'
+    );
+    var done = function(v) { closeModal(); resolve(v); };
+    $('#__cmCancel').addEventListener('click', function() { done(false); });
+    $('#__cmOk').addEventListener('click', function() { done(true); });
+  });
+}
+
+// 通用输入弹窗：返回 Promise<string|null>（取消返回 null）。用于“添加 QQ 号/群号”等录入。
+// opts: { title, label, placeholder, value, okText, multiline }
+function promptModal(opts) {
+  opts = opts || {};
+  return new Promise(function(resolve) {
+    var inputHtml = opts.multiline
+      ? '<textarea class="input-md" id="__pmInput" rows="4" style="width:100%" placeholder="' + escAttr(opts.placeholder || '') + '">' + esc(opts.value || '') + '</textarea>'
+      : '<input class="input-md" id="__pmInput" style="width:100%" placeholder="' + escAttr(opts.placeholder || '') + '" value="' + escAttr(opts.value || '') + '" />';
+    showModal(
+      opts.title || '请输入',
+      '<div style="display:grid;gap:8px">' +
+      (opts.label ? '<label style="font-size:12px;color:var(--text-muted)">' + esc(opts.label) + '</label>' : '') +
+      inputHtml + '</div>',
+      '<button class="btn btn-ghost btn-sm" id="__pmCancel">取消</button>' +
+      '<button class="btn btn-primary btn-sm" id="__pmOk">' + esc(opts.okText || '确定') + '</button>'
+    );
+    var inp = $('#__pmInput');
+    if (inp) { inp.focus(); }
+    var done = function(v) { closeModal(); resolve(v); };
+    $('#__pmCancel').addEventListener('click', function() { done(null); });
+    $('#__pmOk').addEventListener('click', function() { done((inp && inp.value || '').trim()); });
+    if (inp && !opts.multiline) {
+      inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') { done((inp.value || '').trim()); } });
+    }
+  });
+}
+
 function switchTab(tabName) {
   $$('.nav-item').forEach(function(i) { i.classList.toggle('active', i.dataset.tab === tabName); });
   $$('.mobile-nav-item').forEach(function(i) { i.classList.toggle('active', i.dataset.tab === tabName); });
@@ -1001,7 +1048,7 @@ async function loadOverview() {
     $('#statUserBlackCount').textContent = d.user_black_list_count != null ? d.user_black_list_count : '--';
     $('#statAdminCount').textContent = d.admin_list_count != null ? d.admin_list_count : '--';
     $('#statTotalLogs').textContent = d.total_logs != null ? d.total_logs : '--';
-    $('#logoVer').textContent = d.version || 'v2.3.1';
+    $('#logoVer').textContent = d.version || 'v2.3.2';
     var banner = $('#disclaimerBanner');
     if (banner) banner.style.display = d.disclaimer_agreed ? 'none' : 'block';
   }
@@ -1196,7 +1243,11 @@ function renderGroups(groups) {
       var gid = btn.dataset.gid;
       if (action === 'add-white') { await safePost('whitelist/add', { group_id: gid }); toast('已加入白名单', 'success'); }
       else if (action === 'remove-white') { await safePost('whitelist/remove', { group_id: gid }); toast('已移出白名单', 'success'); }
-      else if (action === 'add-black') { await safePost('blacklist/add', { group_id: gid }); toast('已加入黑名单', 'danger'); }
+      else if (action === 'add-black') {
+        var ok = await confirmModal({ title: '加入群黑名单', body: '确认将群 <b>' + esc(gid) + '</b> 加入黑名单？<br>加入后本插件将不再处理该群的任何消息与审核。', okText: '加入黑名单', danger: true });
+        if (!ok) return;
+        await safePost('blacklist/add', { group_id: gid }); toast('已加入黑名单', 'danger');
+      }
       else if (action === 'remove-black') { await safePost('blacklist/remove', { group_id: gid }); toast('已移出黑名单', 'success'); }
       loadGroups();
     });
@@ -1272,7 +1323,14 @@ function renderMembers(members) {
 
   $$('[data-action="add-admin"]', $('#memberList')).forEach(function(btn) {
     btn.addEventListener('click', async function() {
-      await safePost('admin/add', { user_id: btn.dataset.uid });
+      var uid = btn.dataset.uid;
+      var ok = await confirmModal({
+        title: '设为插件管理员',
+        body: '确认将 <b>' + esc(uid) + '</b> 添加为<b>插件管理员</b>？<br>该用户将获得跨群的插件管理权限。',
+        okText: '设为管理员'
+      });
+      if (!ok) return;
+      await safePost('admin/add', { user_id: uid });
       toast('已添加为管理员', 'success');
       CACHED_GROUP_ID = null;
       openMemberPanel(CURRENT_GROUP);
@@ -1280,7 +1338,14 @@ function renderMembers(members) {
   });
   $$('[data-action="remove-admin"]', $('#memberList')).forEach(function(btn) {
     btn.addEventListener('click', async function() {
-      await safePost('admin/remove', { user_id: btn.dataset.uid });
+      var uid = btn.dataset.uid;
+      var ok = await confirmModal({
+        title: '移除插件管理员',
+        body: '确认移除 <b>' + esc(uid) + '</b> 的<b>插件管理员</b>权限？',
+        okText: '移除', danger: true
+      });
+      if (!ok) return;
+      await safePost('admin/remove', { user_id: uid });
       toast('已移除管理员', 'success');
       CACHED_GROUP_ID = null;
       openMemberPanel(CURRENT_GROUP);
@@ -2550,6 +2615,8 @@ async function loadSuperAdmins() {
   }).join('') : '<p class="empty">暂无</p>';
   $$('.btn-remove', box).forEach(function(b) {
     b.addEventListener('click', async function() {
+      var ok = await confirmModal({ title: '移除群超管', body: '确认移除群 <b>' + esc(b.dataset.saG) + '</b> 的超管 <b>' + esc(b.dataset.saU) + '</b>？', okText: '移除', danger: true });
+      if (!ok) return;
       await safePost('super_admin/remove', { group_id: b.dataset.saG, user_id: b.dataset.saU });
       toast('已移除', 'success'); loadSuperAdmins();
     });
@@ -2568,6 +2635,8 @@ async function loadGrants() {
   }).join('') : '<p class="empty">暂无</p>';
   $$('[data-grant-del]', box).forEach(function(b) {
     b.addEventListener('click', async function() {
+      var ok = await confirmModal({ title: '删除授权配置', body: '确认删除群 <b>' + esc(b.dataset.grantDel) + '</b> 的群管理员动态授权配置？', okText: '删除', danger: true });
+      if (!ok) return;
       await safePost('admin_grant/delete', { group_id: b.dataset.grantDel });
       toast('已删除', 'success'); loadGrants();
     });
@@ -2584,6 +2653,8 @@ async function loadBlocks() {
   }).join('') : '<p class="empty">暂无</p>';
   $$('.btn-remove', box).forEach(function(b) {
     b.addEventListener('click', async function() {
+      var ok = await confirmModal({ title: '恢复 bot 管理权限', body: '确认恢复群 <b>' + esc(b.dataset.abG) + '</b> 中 <b>' + esc(b.dataset.abU) + '</b> 的 bot 管理权限？' });
+      if (!ok) return;
       await safePost('admin_block/remove', { group_id: b.dataset.abG, user_id: b.dataset.abU });
       toast('已恢复其权限', 'success'); loadBlocks();
     });
