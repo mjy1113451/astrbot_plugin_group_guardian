@@ -71,6 +71,12 @@ class SQLiteStorage:
             conn.close()
 
     @staticmethod
+    def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+    @staticmethod
     def _create_tables(conn) -> None:
         # WAL 模式提升并发读性能，NORMAL 同步策略在 crash 后仍可恢复。
         # 三组表：meta（键值对存储）、moderation_logs（审核日志，带时间/群号/用户/操作索引）、lexicon（分类+关键词二级表，级联删除）。
@@ -153,9 +159,13 @@ class SQLiteStorage:
             "status TEXT NOT NULL, "
             "created_at INTEGER NOT NULL, "
             "expire_at INTEGER NOT NULL, "
-            "decided_at INTEGER"
+            "decided_at INTEGER, "
+            "attempts INTEGER NOT NULL DEFAULT 0, "
+            "prompt_sent INTEGER NOT NULL DEFAULT 0"
             ")"
         )
+        SQLiteStorage._ensure_column(conn, "appeals", "attempts", "INTEGER NOT NULL DEFAULT 0")
+        SQLiteStorage._ensure_column(conn, "appeals", "prompt_sent", "INTEGER NOT NULL DEFAULT 0")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_appeals_user_status ON appeals(user_id, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_appeals_expire ON appeals(expire_at)")
         # F3 定时解禁计划
@@ -944,6 +954,46 @@ class SQLiteStorage:
             conn.commit()
         return bool(cur.rowcount)
 
+    def mark_appeal_prompted(self, appeal_id: int) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE appeals SET prompt_sent=1 WHERE id=?",
+                (int(appeal_id),),
+            )
+            conn.commit()
+        return bool(cur.rowcount)
+
+    def claim_appeal_attempt(self, appeal_id: int, max_attempts: int = 2) -> int:
+        """抢占一次文字申诉机会，成功返回当前第几次，失败返回 0。"""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE appeals SET status='judging', attempts=attempts+1 "
+                "WHERE id=? AND status='waiting' AND attempts < ?",
+                (int(appeal_id), int(max_attempts)),
+            )
+            if not cur.rowcount:
+                conn.commit()
+                return 0
+            row = conn.execute("SELECT attempts FROM appeals WHERE id=?", (int(appeal_id),)).fetchone()
+            conn.commit()
+        return int(row["attempts"]) if row else 0
+
+    def reopen_appeal_waiting(self, appeal_id: int, decrement_attempt: bool = False) -> bool:
+        with self._connect() as conn:
+            if decrement_attempt:
+                cur = conn.execute(
+                    "UPDATE appeals SET status='waiting', attempts=MAX(attempts-1, 0) "
+                    "WHERE id=? AND status='judging'",
+                    (int(appeal_id),),
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE appeals SET status='waiting' WHERE id=? AND status='judging'",
+                    (int(appeal_id),),
+                )
+            conn.commit()
+        return bool(cur.rowcount)
+
     def claim_appeal(self, appeal_id: int, expect_status: str = "waiting", new_status: str = "judging") -> bool:
         """原子抢占申诉：仅当当前状态为 expect_status 时才改为 new_status，返回是否抢到。
 
@@ -997,6 +1047,8 @@ class SQLiteStorage:
             "created_at": row["created_at"] or 0,
             "expire_at": row["expire_at"] or 0,
             "decided_at": row["decided_at"] or 0,
+            "attempts": row["attempts"] or 0,
+            "prompt_sent": bool(row["prompt_sent"]),
         }
 
     # ============================================================

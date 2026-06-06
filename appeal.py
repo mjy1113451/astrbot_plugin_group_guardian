@@ -92,16 +92,19 @@ class AppealMixin:
             yield event.plain_result("你的申诉已超时，处罚维持。")
             return
 
-        statement = (event.message_str or "").strip()
+        statement = self._extract_private_statement(event)
         if not statement:
-            yield event.plain_result("请用文字说明你的申诉理由。")
+            if not appeal.get("prompt_sent"):
+                self._storage.mark_appeal_prompted(appeal["id"])
+                yield event.plain_result("请用文字说明你的申诉理由。")
             return
         # 并发互斥：原子地把申诉从 waiting 抢占为 judging。用户连发多条私聊时只有第一条
         # 能抢到，后续请求抢不到直接退出，避免重复调用 LLM 复核、重复解禁、重复回复。
-        if not self._storage.claim_appeal(appeal["id"], "waiting", "judging"):
+        attempt_no = self._storage.claim_appeal_attempt(appeal["id"], 2)
+        if not attempt_no:
             return
 
-        yield event.plain_result("已收到你的申诉，正在结合群内记录复核，请稍候…")
+        yield event.plain_result(f"已收到你的第 {attempt_no} 次申诉，正在结合群内记录复核，请稍候…")
 
         try:
             verdict = await self._judge_appeal(group_id, user_id, statement, appeal)
@@ -109,7 +112,7 @@ class AppealMixin:
             logger.warning(f"[GroupMgr] 申诉复核出错: {e}")
             # 复核失败：把状态回滚为 waiting，允许用户稍后重新申诉（在窗口期内）
             try:
-                self._storage.claim_appeal(appeal["id"], "judging", "waiting")
+                self._storage.reopen_appeal_waiting(appeal["id"], decrement_attempt=True)
             except Exception:
                 pass
             yield event.plain_result("复核过程出错，处罚暂维持，请稍后再发一次申诉。")
@@ -129,11 +132,61 @@ class AppealMixin:
             tip = "申诉通过，已为你解除禁言。" if unbanned else "申诉通过。（解禁可能需要机器人具备管理员权限）"
             yield event.plain_result(f"{tip}\n复核说明：{verdict.get('reason', '')}")
         else:
-            self._storage.set_appeal_status(appeal["id"], "rejected", now)
             self._log_moderation(group_id, user_id, event.get_sender_name(),
                                  f"[申诉] {statement[:100]}", "申诉驳回",
                                  verdict.get("reason", ""), [])
-            yield event.plain_result(f"申诉未通过，处罚维持。\n复核说明：{verdict.get('reason', '')}")
+            if attempt_no < 2:
+                self._storage.reopen_appeal_waiting(appeal["id"])
+                yield event.plain_result(
+                    "本次申诉未通过，处罚暂维持。你还有 1 次申诉机会，可以继续用文字补充说明。\n"
+                    f"复核说明：{verdict.get('reason', '')}"
+                )
+            else:
+                self._storage.set_appeal_status(appeal["id"], "rejected", now)
+                yield event.plain_result(f"申诉未通过，处罚维持。\n复核说明：{verdict.get('reason', '')}")
+
+    def _extract_private_statement(self, event: AstrMessageEvent) -> str:
+        """从私聊事件中提取用户实际输入的文本。
+
+        部分 aiocqhttp/AstrBot 版本的私聊事件会让 event.message_str 为空，但文本仍在
+        message chain 或 raw_message/message_obj.message 里。申诉只接受文字，因此这里做多路兜底。
+        """
+        text = (getattr(event, "message_str", "") or "").strip()
+        if text:
+            return text
+
+        parts = []
+        try:
+            chain = event.get_messages() or []
+        except Exception:
+            chain = []
+        for seg in chain:
+            if isinstance(seg, dict):
+                seg_type = seg.get("type", "")
+                data = seg.get("data", {}) or {}
+                if seg_type == "text":
+                    parts.append(str(data.get("text", "") or ""))
+                continue
+            if hasattr(seg, "text"):
+                parts.append(str(getattr(seg, "text", "") or ""))
+
+        if not parts:
+            raw_message = getattr(getattr(event, "message_obj", None), "message", None)
+            if raw_message is not None:
+                parts.append(self._format_message_content(raw_message))
+
+        if not parts:
+            raw = getattr(getattr(event, "message_obj", None), "raw_message", None)
+            if isinstance(raw, dict):
+                msg = raw.get("message")
+                if msg is not None:
+                    parts.append(self._format_message_content(msg))
+                else:
+                    parts.append(str(raw.get("raw_message", "") or ""))
+            elif raw:
+                parts.append(str(raw))
+
+        return "".join(parts).strip()
 
     async def _judge_appeal(self, group_id: str, user_id: str, statement: str, appeal: dict) -> dict:
         """LLM 复合审核：结合申诉理由 + 群内上下文 + 原处罚，返回 {appeal_valid, reason}。"""
