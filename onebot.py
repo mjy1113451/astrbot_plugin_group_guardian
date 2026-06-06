@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import inspect
 import time
 from typing import Tuple
 
@@ -13,13 +14,17 @@ class OneBotMixin:
     # _call_group_api 对所有群管理 API 做统一的返回值兼容处理。
     async def _get_client(self, event: AstrMessageEvent = None):
         # 三级回退：优先从 event.bot 取，其次用缓存的 self._client，最后遍历 platform_manager 查找可用实例。
+        # AstrBot 文档里的 aiocqhttp client 调用形态是 client.api.call_action()；旧版本/部分适配器
+        # 也可能直接暴露 client.call_action()。这里统一归一化为“可直接 call_action 的对象”。
         if event:
-            client = getattr(event, 'bot', None)
-            if client and hasattr(client, 'call_action'):
+            client = self._normalize_action_client(getattr(event, 'bot', None))
+            if client:
                 self._client = client
                 return client
-        if self._client and hasattr(self._client, 'call_action'):
-            return self._client
+        cached = self._normalize_action_client(self._client)
+        if cached:
+            self._client = cached
+            return cached
         try:
             pm = self.context.platform_manager
             if hasattr(pm, 'get_insts'):
@@ -29,14 +34,30 @@ class OneBotMixin:
             for platform in platforms:
                 if hasattr(platform, 'get_client'):
                     client = platform.get_client()
-                    if client and hasattr(client, 'call_action'):
+                    if inspect.isawaitable(client):
+                        client = await client
+                    client = self._normalize_action_client(client)
+                    if client:
                         self._client = client
                         return client
-                elif hasattr(platform, 'client') and hasattr(platform.client, 'call_action'):
-                    self._client = platform.client
-                    return platform.client
+                for attr in ("client", "bot", "api"):
+                    client = self._normalize_action_client(getattr(platform, attr, None))
+                    if client:
+                        self._client = client
+                        return client
         except Exception as e:
             logger.debug(f"[GroupMgr] 从 platform_manager 获取 client 失败: {e}")
+        return None
+
+    @staticmethod
+    def _normalize_action_client(candidate):
+        if not candidate:
+            return None
+        if hasattr(candidate, 'call_action'):
+            return candidate
+        api = getattr(candidate, 'api', None)
+        if api and hasattr(api, 'call_action'):
+            return api
         return None
 
     def _get_group_id(self, event: AstrMessageEvent) -> str:

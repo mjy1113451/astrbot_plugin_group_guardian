@@ -934,6 +934,12 @@ class WebMixin:
             return jsonify({"status": "success", "data": cache.get("data", [])})
         client = await self._get_client()
         if not client:
+            if cache.get("data"):
+                return jsonify({"status": "success", "data": cache.get("data", []), "stale": True, "message": "无法获取QQ客户端，已显示缓存群列表"})
+            fallback = self._fallback_web_groups()
+            if fallback:
+                self._web_group_cache = {"ts": now, "data": fallback}
+                return jsonify({"status": "success", "data": fallback, "stale": True, "message": "无法获取QQ客户端，已显示本地配置群"})
             return jsonify({"status": "error", "message": "无法获取QQ客户端，请确保已连接"})
         try:
             result = await self._call_onebot_web(client, 'get_group_list', timeout=8.0)
@@ -995,6 +1001,13 @@ class WebMixin:
             return jsonify({"status": "success", "data": cached.get("data", [])})
         client = await self._get_client()
         if not client:
+            if cached:
+                return jsonify({"status": "success", "data": cached.get("data", []), "stale": True, "message": "无法获取QQ客户端，已显示缓存成员"})
+            fallback = self._fallback_web_group_members(group_id)
+            if fallback:
+                member_cache[group_id] = {"ts": now, "data": fallback}
+                self._web_member_cache = member_cache
+                return jsonify({"status": "success", "data": fallback, "stale": True, "message": "无法获取QQ客户端，已显示本地记录成员"})
             return jsonify({"status": "error", "message": "无法获取QQ客户端"})
         try:
             gid = self._safe_int(group_id, 0)
