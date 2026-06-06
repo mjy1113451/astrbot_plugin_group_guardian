@@ -1358,6 +1358,7 @@ async function openMemberPanel(gid, force) {
   if (force) params.force = 1;
   var res = await safeGet('group_members', params);
   if (isApiError(res)) { $('#memberList').innerHTML = '<p class="empty">' + esc(res.message) + '</p>'; return; }
+  if (res && res._api_meta && res._api_meta.message) toast(res._api_meta.message, res._api_meta.stale ? 'warning' : 'info');
   CURRENT_MEMBERS = res;
   CACHED_GROUP_ID = gid;
   renderMembers(CURRENT_MEMBERS);

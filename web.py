@@ -158,6 +158,40 @@ class WebMixin:
             for gid in sorted(group_ids)
         ]
 
+    def _fallback_web_group_members(self, group_id: str) -> list:
+        users = {}
+        admin_set = set(self._get_admin_list())
+        for uid in admin_set:
+            uid = str(uid).strip()
+            if uid:
+                users[uid] = {"user_id": uid, "display_name": uid, "role": "member", "is_plugin_admin": True}
+        for uid in list(getattr(self, "user_black_list", [])) + list(getattr(self, "user_white_list", [])):
+            uid = str(uid).strip()
+            if uid:
+                users.setdefault(uid, {"user_id": uid, "display_name": uid, "role": "member", "is_plugin_admin": uid in admin_set})
+        for item in list(getattr(self, "_moderation_logs", [])):
+            if str(item.get("group_id", "")) != str(group_id):
+                continue
+            uid = str(item.get("user_id", "")).strip()
+            if not uid:
+                continue
+            name = str(item.get("user_name", "") or uid)
+            users[uid] = {"user_id": uid, "display_name": name, "role": "member", "is_plugin_admin": uid in admin_set}
+        enriched = []
+        for uid, item in users.items():
+            enriched.append({
+                "user_id": uid,
+                "nickname": item.get("display_name", uid),
+                "card": "",
+                "display_name": item.get("display_name", uid),
+                "role": item.get("role", "member"),
+                "title": "",
+                "avatar": f"https://q.qlogo.cn/headimg_dl?dst_uin={uid}&spec=640",
+                "is_plugin_admin": bool(item.get("is_plugin_admin")),
+            })
+        enriched.sort(key=lambda x: (0 if x["is_plugin_admin"] else 1, x["display_name"]))
+        return enriched
+
     def _register_web_apis(self):
         # 遍历路由表，每项含 path / handler / methods / desc，统一注册到 self.context.register_web_api。
         try:
@@ -993,12 +1027,22 @@ class WebMixin:
         except asyncio.TimeoutError:
             if cached:
                 return jsonify({"status": "success", "data": cached.get("data", []), "stale": True})
+            fallback = self._fallback_web_group_members(group_id)
+            if fallback:
+                member_cache[group_id] = {"ts": now, "data": fallback}
+                self._web_member_cache = member_cache
+                return jsonify({"status": "success", "data": fallback, "stale": True, "message": "获取群成员超时，已显示本地缓存/记录成员"})
             return jsonify({"status": "error", "message": "获取群成员超时，请稍后重试"})
         except Exception as e:
             logger.warning(f"[GroupMgr] WebUI 获取群成员失败 group={group_id}: {e!r}")
             if cached:
                 return jsonify({"status": "success", "data": cached.get("data", []), "stale": True, "message": f"获取群成员失败，已显示缓存: {self._format_web_error(e)}"})
-            return jsonify({"status": "error", "message": f"获取群成员失败: {self._format_web_error(e)}"})
+            fallback = self._fallback_web_group_members(group_id)
+            if fallback:
+                member_cache[group_id] = {"ts": now, "data": fallback}
+                self._web_member_cache = member_cache
+                return jsonify({"status": "success", "data": fallback, "stale": True, "message": f"获取群成员失败，已显示本地记录成员: {self._format_web_error(e)}"})
+            return jsonify({"status": "error", "message": f"获取群成员失败: {self._format_web_error(e)}。当前 OneBot/平台可能不支持 get_group_member_list，且本地暂无该群成员缓存。"})
 
     async def _web_whitelist_add(self):
         try:
