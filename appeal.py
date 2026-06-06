@@ -139,10 +139,7 @@ class AppealMixin:
             )
 
     def _mark_prompt_once(self, appeal: dict) -> bool:
-        if appeal.get("prompt_sent"):
-            return False
-        self._storage.mark_appeal_prompted(appeal["id"])
-        return True
+        return self._storage.mark_appeal_prompted(appeal["id"])
 
     def _handle_rejected_appeal(self, event: AstrMessageEvent, appeal: dict, group_id: str,
                                 user_id: str, statement: str, verdict: dict,

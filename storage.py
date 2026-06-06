@@ -955,9 +955,16 @@ class SQLiteStorage:
         return bool(cur.rowcount)
 
     def mark_appeal_prompted(self, appeal_id: int) -> bool:
+        """Atomically mark the text prompt as sent.
+
+        Returning rowcount from a conditional UPDATE makes this safe when the
+        user sends multiple non-text private messages at almost the same time:
+        only one handler gets True and sends the prompt.
+        """
         with self._connect() as conn:
             cur = conn.execute(
-                "UPDATE appeals SET prompt_sent=1 WHERE id=?",
+                "UPDATE appeals SET prompt_sent=1 "
+                "WHERE id=? AND status='waiting' AND prompt_sent=0",
                 (int(appeal_id),),
             )
             conn.commit()
@@ -991,21 +998,6 @@ class SQLiteStorage:
                     "UPDATE appeals SET status='waiting' WHERE id=? AND status='judging'",
                     (int(appeal_id),),
                 )
-            conn.commit()
-        return bool(cur.rowcount)
-
-    def claim_appeal(self, appeal_id: int, expect_status: str = "waiting", new_status: str = "judging") -> bool:
-        """原子抢占申诉：仅当当前状态为 expect_status 时才改为 new_status，返回是否抢到。
-
-        用于并发互斥：用户连发多条私聊申诉时，只有第一条能把 waiting 抢成 judging，
-        后续请求 rowcount=0 抢不到，从而避免重复调用 LLM 复核与重复解禁。
-        SQLite 单条 UPDATE 自带行级原子性，配合 WHERE status 条件即为 CAS。
-        """
-        with self._connect() as conn:
-            cur = conn.execute(
-                "UPDATE appeals SET status=? WHERE id=? AND status=?",
-                (new_status, int(appeal_id), expect_status),
-            )
             conn.commit()
         return bool(cur.rowcount)
 
