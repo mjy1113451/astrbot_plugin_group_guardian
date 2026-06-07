@@ -88,7 +88,7 @@ class WebMixin:
             "anti_flood_night_rate_per_hour": (0, 999999),
             "anti_flood_mute_duration": (0, 2592000),
             "anti_flood_recall_threshold": (1, 999999),
-            "repeat_detect_window_seconds": (0, 86400),
+            "repeat_detect_window_seconds": (0, 3600),
             "repeat_detect_count": (2, 9999),
             "long_text_threshold": (0, 1000000),
             "appeal_window_minutes": (1, 10080),

@@ -187,7 +187,7 @@ class AntiFloodMixin:
         hour_ids: List[str] = []
 
         repeat_enabled = self._cfg("repeat_detect_enabled", True, group_id=group_id)
-        repeat_window = self._cfg_int("repeat_detect_window_seconds", 120, group_id=group_id)
+        repeat_window = max(0, min(self._cfg_int("repeat_detect_window_seconds", 120, group_id=group_id), 3600))
         repeat_count_limit = self._cfg_int("repeat_detect_count", 3, group_id=group_id)
         long_text_enabled = self._cfg("long_text_detect_enabled", True, group_id=group_id)
         long_text_threshold = self._cfg_int("long_text_threshold", 500, group_id=group_id)
